@@ -1,6 +1,6 @@
 import { apiUrl } from '../config/env'
 import type { AdminUser, DashboardData, Role } from '../types/admin'
-import type { BulkAction, FilterOptions, Participant, ParticipantChanges, ParticipantFilters, ParticipantPage, CsvParticipant, CsvParticipantPage, CsvPreview, CsvImportResult } from '../types/participant'
+import type { BulkAction, FilterOptions, Participant, ParticipantChanges, ParticipantFilters, ParticipantPage, CsvParticipant, CsvParticipantPage, CsvPreview, CsvImportResult, ParticipantInput } from '../types/participant'
 import type { CertificateFont, CertificateRow, CertificateTemplate } from '../types/certificate'
 import type { Campaign, CampaignInput, EmailTemplate, RecipientSelection, RecipientSummary } from '../types/email'
 
@@ -59,10 +59,10 @@ export const api = {
   participants: (filters: ParticipantFilters, page: number, pageSize = 50) => request<ParticipantPage>(`/api/participants?${participantParams(filters, page, pageSize)}`),
   csvParticipants: (search = '', sortBy = 'name', sortDir = 'asc', page = 1) => request<CsvParticipantPage>(`/api/participants?${new URLSearchParams({ search, sort_by: sortBy, sort_dir: sortDir, page: String(page), page_size: '50' })}`),
   allCsvParticipants: () => request<CsvParticipant[]>('/api/participants/all'),
-  updateCsvParticipant: (id: number, changes: Pick<CsvParticipant, 'name' | 'email' | 'team_name' | 'college'>) => request<CsvParticipant>(`/api/participants/${id}`, { method: 'PATCH', body: JSON.stringify(changes) }),
-  createCsvParticipant: (person: Pick<CsvParticipant, 'name' | 'email' | 'team_name' | 'college'>) => request<CsvParticipant>('/api/participants', { method: 'POST', body: JSON.stringify(person) }),
+  updateCsvParticipant: (id: number, changes: ParticipantInput) => request<CsvParticipant>(`/api/participants/${id}`, { method: 'PATCH', body: JSON.stringify(changes) }),
+  createCsvParticipant: (person: ParticipantInput) => request<CsvParticipant>('/api/participants', { method: 'POST', body: JSON.stringify(person) }),
   previewCsv: (file: File) => { const body = new FormData(); body.set('file', file); return request<CsvPreview>('/api/participants/import/preview', { method: 'POST', body }) },
-  importCsv: (file: File, digest: string) => { const body = new FormData(); body.set('file', file); body.set('digest', digest); return request<CsvImportResult>('/api/participants/import', { method: 'POST', body }) },
+  importCsv: (file: File, digest: string, approvedLines: number[] = []) => { const body = new FormData(); body.set('file', file); body.set('digest', digest); body.set('approved_lines', approvedLines.join(',')); return request<CsvImportResult>('/api/participants/import', { method: 'POST', body }) },
   deleteCsvParticipant: (id: number) => request<void>(`/api/participants/${id}`, { method: 'DELETE' }),
   clearCsvParticipants: () => request<void>('/api/participants/clear', { method: 'DELETE' }),
   participantOptions: () => request<FilterOptions>('/api/participants/options'),

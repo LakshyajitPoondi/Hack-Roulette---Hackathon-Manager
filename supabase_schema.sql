@@ -1,7 +1,8 @@
 -- Tech Roulette: current FastAPI/SQLAlchemy schema for Supabase Postgres.
 -- Creates the current schema on a fresh project and adds the CSV participant
 -- table, allow_resend, optional participant team/college, and certificate
--- team-line and font settings to an existing database. Safe to run more than once.
+-- team-line and font settings, and name+email participant uniqueness to an
+-- existing database. Safe to run more than once.
 -- CSV-imported participants live in Postgres; personalized certificates are rendered in memory.
 -- Run in the Supabase SQL Editor before starting or deploying the backend.
 
@@ -43,7 +44,26 @@ CREATE TABLE IF NOT EXISTS public.participants (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS ix_participants_email ON public.participants (email);
+-- Participants may share an email; the same name and email together may not repeat.
+-- Compared after trimming and lower-casing, the same rule the backend applies before inserting.
+-- Created before the old index is dropped, so exact duplicates stay blocked throughout.
+CREATE UNIQUE INDEX IF NOT EXISTS ux_participants_name_email
+    ON public.participants (lower(trim(email)), lower(trim(name)));
+
+-- Replace the old one-participant-per-email index with a plain lookup index of the same name.
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_index AS i
+        JOIN pg_class AS c ON c.oid = i.indexrelid
+        JOIN pg_namespace AS n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public' AND c.relname = 'ix_participants_email' AND i.indisunique
+    ) THEN
+        DROP INDEX public.ix_participants_email;
+    END IF;
+END
+$$;
+CREATE INDEX IF NOT EXISTS ix_participants_email ON public.participants (email);
 
 -- Manually added participants may omit team and college. CSV import still requires both.
 ALTER TABLE public.participants ALTER COLUMN team_name DROP NOT NULL;
@@ -165,6 +185,7 @@ CREATE TABLE IF NOT EXISTS public.email_deliveries (
     id                   SERIAL PRIMARY KEY,
     campaign_id          INTEGER NOT NULL REFERENCES public.email_campaigns (id) ON DELETE CASCADE,
     -- Older deliveries may hold Google Sheet row IDs. Snapshots remain valid after CSV migration.
+    -- participant_key is 'participant:<id>' for new deliveries; older rows hold the email address.
     participant_id       INTEGER NOT NULL,
     participant_key      VARCHAR(320) NOT NULL,
     participant_name     VARCHAR(160) NOT NULL,

@@ -1,10 +1,10 @@
 from datetime import datetime, timezone
 from email_validator import EmailNotValidError, validate_email
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.email import EmailCampaign, EmailDelivery
-from app.models.participant import Participant
+from app.models.participant import Participant, identity_part
 
 
 def utcnow():
@@ -21,19 +21,65 @@ def sent_keys(db: Session, *, name: str, attach_certificate: bool, exclude_deliv
     return set(db.scalars(query))
 
 
+ALREADY_SENT = "Already sent for this certificate or campaign"
+AMBIGUOUS_HISTORY = ("An older send to this shared email cannot be matched to one participant; "
+                     "not sent automatically to avoid a possible duplicate.")
+PARTICIPANT_KEY = "participant:"
+
+
+def send_history(db: Session, people: list[Participant], *, name: str, attach_certificate: bool,
+                 exclude_delivery_id: int | None = None) -> tuple[set[int], set[int]]:
+    """Return (IDs already sent, IDs whose older history is ambiguous) for these participants.
+
+    New deliveries are keyed 'participant:<id>'. Older ones are keyed by email only; they count for the
+    email's only holder, or for the holder whose name matches the name recorded on the delivery. If the
+    email is now shared and no holder's name matches, every holder is reported as ambiguous.
+    """
+    query = (select(EmailDelivery.participant_key, EmailDelivery.participant_name).join(EmailCampaign)
+             .where(EmailDelivery.status == "SENT", EmailCampaign.attach_certificate == attach_certificate))
+    if not attach_certificate:
+        query = query.where(EmailCampaign.name == name.strip())
+    if exclude_delivery_id is not None:
+        query = query.where(EmailDelivery.id != exclude_delivery_id)
+    sent_ids, legacy = set(), {}
+    for key, recorded_name in db.execute(query):
+        if key.startswith(PARTICIPANT_KEY):
+            sent_ids.add(int(key.removeprefix(PARTICIPANT_KEY)))
+        else:
+            legacy.setdefault(identity_part(key), set()).add(identity_part(recorded_name))
+    sent, ambiguous = {person.id for person in people if person.id in sent_ids}, set()
+    emails = {identity_part(person.email) for person in people if person.id not in sent} & legacy.keys()
+    if emails:
+        holders: dict[str, list[Participant]] = {}
+        for holder in db.scalars(select(Participant).where(func.lower(func.trim(Participant.email)).in_(emails))):
+            holders.setdefault(identity_part(holder.email), []).append(holder)
+        for person in people:
+            email = identity_part(person.email)
+            if person.id in sent or email not in emails:
+                continue
+            sharing = holders.get(email) or [person]
+            if len(sharing) == 1 or identity_part(person.name) in legacy[email]:
+                sent.add(person.id)
+            elif not any(identity_part(other.name) in legacy[email] for other in sharing):
+                ambiguous.add(person.id)
+    return sent, ambiguous
+
+
 def recipients(db: Session, *, selection: str, participant_ids: list[int] | None,
                college: str | None, attendance: str | None, name: str = "Tech Roulette certificates",
                attach_certificate: bool = True, resend: bool = False,
-               send_to: str = "unsent", **_):
+               send_to: str = "unsent", **_) -> tuple[list[Participant], list[int]]:
+    """Return (recipients, IDs left out because older shared-email history is ambiguous)."""
     people = list(db.scalars(select(Participant).order_by(Participant.id)))
     if selection == "selected":
         ids = set(participant_ids or []); people = [p for p in people if p.id in ids]
     elif selection == "filtered":
         if college: people = [p for p in people if p.college == college]
+    ambiguous: set[int] = set()
     if send_to == "unsent" or not resend:
-        sent = sent_keys(db, name=name, attach_certificate=attach_certificate)
-        people = [p for p in people if p.participant_key not in sent]
-    return people
+        sent, ambiguous = send_history(db, people, name=name, attach_certificate=attach_certificate)
+        people = [p for p in people if p.id not in sent and p.id not in ambiguous]
+    return people, sorted(ambiguous)
 
 
 def classify(db: Session, people: list[Participant]):

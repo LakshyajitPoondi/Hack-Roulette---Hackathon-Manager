@@ -87,14 +87,16 @@ def test_csv_import_preview_validation_and_rbac(client, make_user, login, fake_s
     response = client.post("/api/participants/import/preview", files={"file": ("people.csv", data)})
     assert response.status_code == 200, response.text
     preview = response.json()
-    # "Missing team" is valid now: team name is optional.
-    assert (preview["valid"], preview["duplicates"], preview["invalid"]) == (2, 2, 2)
+    # "Missing team" is valid (team is optional); "Meera Again" shares an email under another name (review);
+    # "Alex Johnson" repeats an existing name and email (exact duplicate).
+    assert (preview["valid"], preview["review"], preview["duplicates"], preview["invalid"]) == (2, 1, 1, 2)
     assert preview["rows"][0]["team_name"] == "Nova, Team"
     assert client.get("/api/participants").json()["total"] == 1
     changed = client.post("/api/participants/import", data={"digest": preview["digest"]}, files={"file": ("people.csv", b"name,email,team_name,college\n")})
     assert changed.status_code == 409
     imported = client.post("/api/participants/import", data={"digest": preview["digest"]}, files={"file": ("people.csv", data)})
-    assert imported.json() == {"imported": 2, "duplicates": 2, "invalid": 2}
+    assert imported.json() == {"imported": 2, "imported_new": 2, "imported_reviewed": 0, "review_skipped": 1,
+                               "duplicates": 1, "invalid": 2}
     assert client.get("/api/participants").json()["total"] == 3
     assert client.get("/api/participants", params={"search": "meera"}).json()["items"][0]["email"] == "meera@example.com"
     repeated = client.post("/api/participants/import", data={"digest": preview["digest"]}, files={"file": ("people.csv", data)})
@@ -139,7 +141,9 @@ def test_admin_can_edit_csv_participant_and_duplicate_email_is_rejected(client, 
     assert {key: response.json()[key] for key in changes} == {
         "name": "Alex Johnson", "email": "new@example.com", "team_name": "Team Nova", "college": "XYZ University"}
     assert client.get("/api/participants/2").json()["college"] == "XYZ University"
-    assert client.patch("/api/participants/2", json={**changes, "email": "meera@example.com"}).status_code == 409
+    # Sharing Meera's email under another name needs confirmation; Meera's own name and email is an exact duplicate.
+    assert client.patch("/api/participants/2", json={**changes, "email": "meera@example.com"}).status_code == 428
+    assert client.patch("/api/participants/2", json={**changes, "name": "MEERA", "email": "meera@example.com"}).status_code == 409
     assert client.patch("/api/participants/2", json={**changes, "name": " "}).status_code == 422
     assert client.patch("/api/participants/2", json={**changes, "college": " "}).json()["college"] is None
     assert client.patch("/api/participants/2", json={**changes, "created_at": "2020-01-01"}).status_code == 422
@@ -196,7 +200,81 @@ def test_csv_team_and_college_are_optional(client, make_user, login):
     ambiguous = preview(b"name,email,team,team name\nX,x@example.com,A,B\n")
     assert ambiguous.status_code == 422 and ambiguous.json()["detail"] == "CSV has more than one team name column"
     rows = preview(b"name,email,college\n,missing@example.com,C\nNo Email,,C\nBad,not-an-email,\n"
-                   b"Dup,JOHN@example.com,\nLong,long@example.com," + b"x" * 161 + b"\n").json()["rows"]
-    assert [(row["status"], row["reason"]) for row in rows] == [
+                   b"john doe,JOHN@example.com,\nLong,long@example.com," + b"x" * 161 + b"\n").json()["rows"]
+    assert [(row["status"], row["reason"].split(" #")[0]) for row in rows] == [
         ("INVALID", "Missing name"), ("INVALID", "Missing email"), ("INVALID", "Invalid email"),
-        ("DUPLICATE", "Duplicate email"), ("INVALID", "College is too long")]
+        ("DUPLICATE", "Same name and email as existing participant"), ("INVALID", "College is too long")]
+
+
+def test_csv_duplicate_review_rules_and_import(client, db, make_user, login):
+    import pytest
+    from sqlalchemy.exc import IntegrityError
+    from app.models import Participant
+    make_user(Role.ADMIN, "dupes@example.com"); login("dupes@example.com")
+    john = client.post("/api/participants", json={"name": "John", "email": "john@gmail.com", "team_name": "Nova", "college": "ABC"}).json()
+    data = (b"name,email,team_name,college\n"
+            b"John,john@gmail.com,Other Team,Other College\n"   # line 2: exact duplicate despite different team/college
+            b"Jonathan,john@gmail.com,,\n"                      # line 3: same email, different name -> review
+            b"John,john2@gmail.com,,\n"                         # line 4: same name, different email -> new
+            b"John,JOHN@gmail.com,,\n"                          # line 5: email case differs -> exact duplicate
+            b"john,john@gmail.com,,\n"                          # line 6: name case differs -> exact duplicate
+            b"  John  ,  john@gmail.com  ,,\n"                  # line 7: surrounding spaces -> exact duplicate
+            b"JONATHAN,john@gmail.com,,\n"                      # line 8: repeats line 3 -> exact duplicate
+            b"Johnny,john2@gmail.com,,\n")                      # line 9: shares line 4's email -> review
+
+    def preview():
+        response = client.post("/api/participants/import/preview", files={"file": ("people.csv", data)})
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    def run_import(lines=()):
+        digest = preview()["digest"]
+        return client.post("/api/participants/import", files={"file": ("people.csv", data)},
+                           data={"digest": digest, "approved_lines": ",".join(map(str, lines))}).json()
+
+    checked = preview()
+    rows = {row["line"]: row for row in checked["rows"]}
+    assert {line: row["status"] for line, row in rows.items()} == {
+        2: "DUPLICATE", 3: "REVIEW", 4: "VALID", 5: "DUPLICATE", 6: "DUPLICATE", 7: "DUPLICATE", 8: "DUPLICATE", 9: "REVIEW"}
+    assert (checked["valid"], checked["review"], checked["duplicates"], checked["invalid"]) == (1, 2, 5, 0)
+    assert rows[2]["reason"] == f"Same name and email as existing participant #{john['id']}"
+    assert rows[8]["reason"] == "Same name and email as line 3"
+    # The review shows the existing record next to the incoming row.
+    assert rows[3]["matches"] == [{"source": "existing", "id": john["id"], "line": None, "name": "John",
+                                   "email": "john@gmail.com", "team_name": "Nova", "college": "ABC"}]
+    assert [(match["source"], match["line"], match["name"]) for match in rows[9]["matches"]] == [("csv", 4, "John")]
+
+    # Default import never takes reviewable rows.
+    assert run_import() == {"imported": 1, "imported_new": 1, "imported_reviewed": 0, "review_skipped": 2, "duplicates": 5, "invalid": 0}
+    # Approving every line still never imports exact duplicates.
+    approved = run_import(range(2, 10))
+    assert (approved["imported_new"], approved["imported_reviewed"], approved["review_skipped"]) == (0, 2, 0)
+    assert run_import(range(2, 10))["imported"] == 0  # repeated request creates nothing
+    people = sorted((p["email"], p["name"], p["team_name"]) for p in client.get("/api/participants/all").json())
+    assert people == [("john2@gmail.com", "John", None), ("john2@gmail.com", "Johnny", None),
+                      ("john@gmail.com", "John", "Nova"), ("john@gmail.com", "Jonathan", None)]
+
+    # The database index blocks exact duplicates even when the app checks are bypassed.
+    db.add(Participant(name=" JOHN ", email="John@gmail.com "))
+    with pytest.raises(IntegrityError):
+        db.commit()
+    db.rollback()
+
+
+def test_manual_add_and_edit_with_shared_email_need_confirmation(client, make_user, login):
+    make_user(Role.ADMIN, "shared@example.com"); login("shared@example.com")
+    john = client.post("/api/participants", json={"name": "John", "email": "john@gmail.com"}).json()
+    jonathan = {"name": "Jonathan", "email": "JOHN@gmail.com"}
+    warning = client.post("/api/participants", json=jonathan)
+    assert warning.status_code == 428 and "already belongs to John" in warning.json()["detail"]
+    created = client.post("/api/participants", json={**jonathan, "allow_shared_email": True})
+    assert created.status_code == 201 and created.json()["email"] == "john@gmail.com"
+    for exact in ({"name": " john ", "email": "John@Gmail.com"}, {"name": "JONATHAN", "email": "john@gmail.com"}):
+        assert client.post("/api/participants", json={**exact, "allow_shared_email": True}).status_code == 409
+    # Editing other details of a shared-email participant needs no confirmation.
+    assert client.patch(f"/api/participants/{created.json()['id']}", json={**jonathan, "college": "XYZ"}).status_code == 200
+    other = client.post("/api/participants", json={"name": "Mia", "email": "mia@gmail.com"}).json()
+    assert client.patch(f"/api/participants/{other['id']}", json={"name": "Mia", "email": "john@gmail.com"}).status_code == 428
+    assert client.patch(f"/api/participants/{other['id']}", json={"name": "Mia", "email": "john@gmail.com", "allow_shared_email": True}).status_code == 200
+    assert client.patch(f"/api/participants/{other['id']}", json={"name": "John", "email": "john@gmail.com"}).status_code == 409
+    assert client.get(f"/api/participants/{john['id']}").json()["name"] == "John"

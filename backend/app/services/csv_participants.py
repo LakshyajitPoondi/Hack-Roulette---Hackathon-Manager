@@ -9,7 +9,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.participant import Participant
+from app.models.participant import Participant, identity_part
 
 MAX_CSV_BYTES = 5 * 1024 * 1024
 MAX_ROWS = 5000
@@ -48,8 +48,12 @@ def preview(db: Session, data: bytes) -> dict:
                                     if field in REQUIRED else f"CSV has more than one {field.replace('_', ' ')} column")
             if matches:
                 columns[field] = matches[0]
-        existing = set(db.scalars(select(Participant.email)))
-        seen = set()
+        # Everyone already holding each email: existing participants, then importable earlier rows of this file.
+        by_email: dict[str, list[dict]] = {}
+        for person in db.scalars(select(Participant).order_by(Participant.id)):
+            by_email.setdefault(identity_part(person.email), []).append(
+                {"source": "existing", "id": person.id, "line": None, "name": person.name, "email": person.email,
+                 "team_name": person.team_name, "college": person.college})
         rows = []
         for raw in reader:
             if not any(cell.strip() for cell in raw):
@@ -73,12 +77,27 @@ def preview(db: Session, data: bytes) -> dict:
                     values["email"] = validate_email(values["email"], check_deliverability=False).normalized.casefold()
                 except EmailNotValidError:
                     reasons.append("Invalid email")
-            duplicate = False
+            status, reason, matches = "INVALID", "; ".join(reasons), []
             if not reasons:
-                duplicate = values["email"] in seen or values["email"] in existing
-                seen.add(values["email"])
-            rows.append({"line": reader.line_num, **values, "status": "INVALID" if reasons else "DUPLICATE" if duplicate else "VALID",
-                         "reason": "; ".join(reasons) if reasons else "Duplicate email" if duplicate else ""})
+                email_key = identity_part(values["email"])
+                earlier = list(by_email.get(email_key, []))
+                exact = next((match for match in earlier if identity_part(match["name"]) == identity_part(values["name"])), None)
+                if exact:
+                    # Same name and email: never imported, whatever the team or college.
+                    status, matches = "DUPLICATE", [exact]
+                    reason = (f"Same name and email as existing participant #{exact['id']}" if exact["source"] == "existing"
+                              else f"Same name and email as line {exact['line']}")
+                elif earlier:
+                    status, matches = "REVIEW", earlier
+                    reason = "Email already used by " + ", ".join(
+                        f"{match['name']} (participant #{match['id']})" if match["source"] == "existing"
+                        else f"{match['name']} (line {match['line']})" for match in earlier)
+                else:
+                    status, reason = "VALID", ""
+                if status != "DUPLICATE":
+                    by_email.setdefault(email_key, []).append(
+                        {"source": "csv", "id": None, "line": reader.line_num, **{key: values[key] or None for key in FIELDS}})
+            rows.append({"line": reader.line_num, **values, "status": status, "reason": reason, "matches": matches})
     except csv.Error as exc:
         raise HTTPException(422, f"Malformed CSV: {exc}") from None
     except StopIteration:
@@ -87,25 +106,33 @@ def preview(db: Session, data: bytes) -> dict:
         raise HTTPException(422, "CSV contains no participant rows")
     return {"digest": hashlib.sha256(data).hexdigest(), "rows": rows,
             "valid": sum(row["status"] == "VALID" for row in rows),
+            "review": sum(row["status"] == "REVIEW" for row in rows),
             "duplicates": sum(row["status"] == "DUPLICATE" for row in rows),
             "invalid": sum(row["status"] == "INVALID" for row in rows)}
 
 
-def import_rows(db: Session, data: bytes, expected_digest: str) -> dict:
+def import_rows(db: Session, data: bytes, expected_digest: str, approved_lines: set[int] = frozenset()) -> dict:
+    """Import new rows, plus REVIEW rows whose line the admin approved. Exact duplicates are never imported."""
     if hashlib.sha256(data).hexdigest() != expected_digest:
         raise HTTPException(409, "CSV changed after preview. Preview it again.")
+    # Re-check against the database now; a row only counts as reviewed if it is still REVIEW and was approved.
     result = preview(db, data)
-    valid = [row for row in result["rows"] if row["status"] == "VALID"]
-    if valid:
-        values = [{key: row[key] or None for key in FIELDS} for row in valid]
+    new = [row for row in result["rows"] if row["status"] == "VALID"]
+    reviewed = [row for row in result["rows"] if row["status"] == "REVIEW" and row["line"] in approved_lines]
+    inserted: set[tuple[str, str]] = set()
+    if new or reviewed:
+        values = [{key: row[key] or None for key in FIELDS} for row in new + reviewed]
         if db.bind.dialect.name == "postgresql":
             from sqlalchemy.dialects.postgresql import insert
         else:
             from sqlalchemy.dialects.sqlite import insert
-        statement = insert(Participant).values(values).on_conflict_do_nothing(index_elements=[Participant.email]).returning(Participant.id)
-        imported = len(db.scalars(statement).all())
+        # The name+email unique index skips any exact duplicate created concurrently.
+        statement = insert(Participant).values(values).on_conflict_do_nothing().returning(Participant.email, Participant.name)
+        inserted = {(identity_part(email), identity_part(name)) for email, name in db.execute(statement).all()}
         db.commit()
-    else:
-        imported = 0
-    return {"imported": imported, "duplicates": result["duplicates"] + len(valid) - imported,
-            "invalid": result["invalid"]}
+    was_inserted = lambda row: (identity_part(row["email"]), identity_part(row["name"])) in inserted
+    imported_new = sum(map(was_inserted, new))
+    imported_reviewed = sum(map(was_inserted, reviewed))
+    return {"imported": imported_new + imported_reviewed, "imported_new": imported_new, "imported_reviewed": imported_reviewed,
+            "review_skipped": result["review"] - imported_reviewed,
+            "duplicates": result["duplicates"] + len(new) - imported_new, "invalid": result["invalid"]}

@@ -1,9 +1,12 @@
 export type AttendanceStatus = 'REGISTERED' | 'PRESENT' | 'ABSENT'
 export interface CsvParticipant { id: number; name: string; email: string; team_name: string | null; college: string | null; created_at: string }
 export interface CsvParticipantPage { source: 'csv'; items: CsvParticipant[]; page: number; page_size: number; total: number; total_pages: number }
-export interface CsvPreviewRow { line: number; name: string; email: string; team_name: string; college: string; status: 'VALID' | 'DUPLICATE' | 'INVALID'; reason: string }
-export interface CsvPreview { digest: string; rows: CsvPreviewRow[]; valid: number; duplicates: number; invalid: number }
-export interface CsvImportResult { imported: number; duplicates: number; invalid: number }
+// A participant already holding a row's email: an existing record, or an earlier row of the same CSV.
+export interface CsvMatch { source: 'existing' | 'csv'; id: number | null; line: number | null; name: string; email: string; team_name: string | null; college: string | null }
+export interface CsvPreviewRow { line: number; name: string; email: string; team_name: string; college: string; status: 'VALID' | 'REVIEW' | 'DUPLICATE' | 'INVALID'; reason: string; matches: CsvMatch[] }
+export interface CsvPreview { digest: string; rows: CsvPreviewRow[]; valid: number; review: number; duplicates: number; invalid: number }
+export interface CsvImportResult { imported: number; imported_new: number; imported_reviewed: number; review_skipped: number; duplicates: number; invalid: number }
+export type ParticipantInput = Pick<CsvParticipant, 'name' | 'email' | 'team_name' | 'college'> & { allow_shared_email?: boolean }
 export type BulkAction = 'MARK_PRESENT' | 'MARK_ABSENT' | 'MARK_ELIGIBLE' | 'MARK_INELIGIBLE'
 
 export interface Participant {

@@ -222,8 +222,10 @@ def test_email(payload: TestInput, db: Database, _: Admin):
 def recipient_summary(payload: Selection, db: Database, _: Admin):
     if payload.selection == "selected" and not payload.participant_ids:
         raise HTTPException(422, "Select at least one participant")
-    result = classify(db, recipients(db, **payload.model_dump()))
-    return {key: value for key, value in result.items() if key != "ready"}
+    people, ambiguous = recipients(db, **payload.model_dump())
+    result = classify(db, people)
+    return {**{key: value for key, value in result.items() if key != "ready"},
+            "history_ambiguous": len(ambiguous), "history_ambiguous_ids": ambiguous}
 
 
 @router.get("/campaigns")
@@ -255,7 +257,8 @@ def create_campaign(payload: CampaignInput, db: Database, actor: Admin):
     reply = valid_email(payload.reply_to)
     if payload.email_template_id and not db.get(EmailTemplate, payload.email_template_id):
         raise HTTPException(404, "Email template not found")
-    result = classify(db, recipients(db, **payload.model_dump(include={"selection", "participant_ids", "college", "attendance", "resend", "send_to", "name", "attach_certificate"})))
+    people, _ambiguous = recipients(db, **payload.model_dump(include={"selection", "participant_ids", "college", "attendance", "resend", "send_to", "name", "attach_certificate"}))
+    result = classify(db, people)
     if not result["ready"]:
         raise HTTPException(422, "No eligible recipients have a valid email address")
     if payload.expected_recipients is not None and len(result["ready"]) != payload.expected_recipients:

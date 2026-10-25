@@ -9,7 +9,7 @@ from app.models.certificate import CertificateTemplate
 from app.models.email import EmailCampaign, EmailDelivery
 from app.models.participant import Participant
 from app.services.certificates import placeholder_values, render_pdf
-from app.services.email_campaigns import refresh_status, sent_keys, utcnow
+from app.services.email_campaigns import AMBIGUOUS_HISTORY, ALREADY_SENT, refresh_status, send_history, sent_keys, utcnow
 from app.services.email_delivery import filename, provider, render
 
 logger = logging.getLogger(__name__)
@@ -39,18 +39,24 @@ def process_campaign(db: Session, campaign_id: int, limit: int) -> int:
             campaign = delivery.campaign
             if db.bind.dialect.name == "postgresql":
                 scope = "certificate" if campaign.attach_certificate else f"plain:{campaign.name}"
+                # Lock per participant ID, so participants sharing an email never block or merge each other.
                 db.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
-                           {"key": f"{scope}:{delivery.participant_key}"})
-            if not campaign.allow_resend and delivery.participant_key in sent_keys(
-                    db, name=campaign.name, attach_certificate=campaign.attach_certificate,
-                    exclude_delivery_id=delivery.id):
-                delivery.status = "SKIPPED"
-                delivery.failure_reason = "Already sent for this certificate or campaign"
-                db.commit()
-                processed += 1
-                continue
-            delivery.attempt_count += 1
+                           {"key": f"{scope}:participant:{delivery.participant_id}"})
             person = db.get(Participant, delivery.participant_id)
+            if not campaign.allow_resend:
+                history = dict(name=campaign.name, attach_certificate=campaign.attach_certificate, exclude_delivery_id=delivery.id)
+                if person is not None:
+                    sent, ambiguous = send_history(db, [person], **history)
+                    skip = ALREADY_SENT if person.id in sent else AMBIGUOUS_HISTORY if person.id in ambiguous else None
+                else:
+                    skip = ALREADY_SENT if delivery.participant_key in sent_keys(db, **history) else None
+                if skip:
+                    delivery.status = "SKIPPED"
+                    delivery.failure_reason = skip
+                    db.commit()
+                    processed += 1
+                    continue
+            delivery.attempt_count += 1
             team = person.team_name if person is not None else None
             if person is not None:
                 delivery.participant_name = person.name

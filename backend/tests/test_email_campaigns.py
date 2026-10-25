@@ -279,3 +279,72 @@ def test_campaign_keeps_certificate_settings_it_started_with(client, db, make_us
     for message in sent:
         content = PdfReader(io.BytesIO(message["attachment"])).pages[0].extract_text()
         assert "Team Test" in content and "Example College" in content
+
+
+def shared_email_people(client):
+    john = client.post("/api/participants", json={"name": "John", "email": "john@gmail.com", "college": "ABC College"}).json()
+    jonathan = client.post("/api/participants", json={"name": "Jonathan", "email": "john@gmail.com", "college": "XYZ College",
+                                                      "allow_shared_email": True}).json()
+    return john, jonathan
+
+
+def test_shared_email_participants_get_their_own_deliveries_and_certificates(client, db, make_user, login, monkeypatch):
+    from pypdf import PdfReader
+    from app.models import EmailDelivery
+    from app.services import campaign_processor
+    admin = make_user(Role.ADMIN, "shared-send@example.com"); login(admin.email)
+    db.add(CertificateTemplate(name="Certificate", file_data=png(), file_type="png", is_active=True, created_by=admin.id)); db.commit()
+    john, jonathan = shared_email_people(client)
+    for person, college in ((john, "ABC College"), (jonathan, "XYZ College")):
+        text = PdfReader(io.BytesIO(client.get(f"/api/certificates/participants/{person['id']}/download").content)).pages[0].extract_text()
+        assert person["name"] in text and college in text
+    sent = []
+    class Provider:
+        def send(self, **kwargs):
+            sent.append(kwargs)
+            return f"message-{len(sent)}"
+    monkeypatch.setattr(campaign_processor, "provider", lambda: Provider())
+    payload = {"name": "Certificates", "sender_name": "Tech Roulette", "subject": "Hi {{participant_name}}", "body": "From {{college_name}}",
+               "selection": "selected", "participant_ids": [john["id"], jonathan["id"]], "confirmed": True}
+    summary = client.post("/api/email/recipients/summary", json=payload).json()
+    assert (summary["recipients_ready"], summary["history_ambiguous"]) == (2, 0)
+    response = client.post("/api/email/campaigns", json=payload)
+    assert response.status_code == 201, response.text
+    assert [(m["to"], m["subject"], m["body"]) for m in sent] == [
+        ("john@gmail.com", "Hi John", "From ABC College"), ("john@gmail.com", "Hi Jonathan", "From XYZ College")]
+    texts = [PdfReader(io.BytesIO(m["attachment"])).pages[0].extract_text() for m in sent]
+    assert "John" in texts[0] and "Jonathan" not in texts[0] and "Jonathan" in texts[1]
+    keys = {d.participant_id: d.participant_key for d in db.query(EmailDelivery).all()}
+    assert keys == {john["id"]: f"participant:{john['id']}", jonathan["id"]: f"participant:{jonathan['id']}"}
+    # Both are now in send history; a third person sharing the email is still unsent.
+    jo = client.post("/api/participants", json={"name": "Jo", "email": "john@gmail.com", "allow_shared_email": True}).json()
+    again = client.post("/api/email/recipients/summary", json={**payload, "participant_ids": [john["id"], jonathan["id"], jo["id"]]}).json()
+    assert (again["total_selected"], again["recipients_ready"]) == (1, 1)
+
+
+def test_older_email_keyed_history_is_matched_conservatively(client, db, make_user, login):
+    from app.models import EmailCampaign, EmailDelivery
+    admin = make_user(Role.ADMIN, "legacy@example.com"); login(admin.email)
+    john, jonathan = shared_email_people(client)
+    ann = client.post("/api/participants", json={"name": "Ann", "email": "shared@gmail.com"}).json()
+    bea = client.post("/api/participants", json={"name": "Bea", "email": "shared@gmail.com", "allow_shared_email": True}).json()
+    carl = client.post("/api/participants", json={"name": "Carl", "email": "carl@gmail.com"}).json()
+    old = EmailCampaign(name="Old certificates", sender_name="Tech Roulette", subject="s", body="b", attach_certificate=True,
+                        status="COMPLETED", created_by=admin.id)
+    db.add(old); db.flush()
+    # Deliveries from before this change were keyed by the email address.
+    for person_id, key, name in ((john["id"], "john@gmail.com", "John"), (ann["id"], "shared@gmail.com", "Old Name"),
+                                 (carl["id"], "carl@gmail.com", "Karl")):
+        db.add(EmailDelivery(campaign_id=old.id, participant_id=person_id, participant_key=key, participant_name=name,
+                             email=key, status="SENT"))
+    db.commit()
+    ids = [john["id"], jonathan["id"], ann["id"], bea["id"], carl["id"]]
+    summary = client.post("/api/email/recipients/summary", json={"selection": "selected", "participant_ids": ids}).json()
+    # John matches by name; Carl is his email's only holder (unchanged behaviour); Jonathan was never sent;
+    # Ann and Bea share an email whose old delivery matches neither name, so both are held back and reported.
+    assert (summary["total_selected"], summary["recipients_ready"]) == (1, 1)
+    assert summary["history_ambiguous_ids"] == sorted([ann["id"], bea["id"]])
+    explicit = client.post("/api/email/recipients/summary", json={"selection": "selected", "participant_ids": ids,
+                                                                  "resend": True, "send_to": "all"}).json()
+    assert explicit["recipients_ready"] == 5 and explicit["history_ambiguous"] == 0
+    assert db.query(EmailDelivery).count() == 3  # history itself is never rewritten
