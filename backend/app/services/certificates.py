@@ -43,7 +43,11 @@ def get_template(db: Session, template_id: int) -> CertificateTemplate:
     return template
 
 
-def render_pdf(template: CertificateTemplate, name: str, college: str) -> bytes:
+def render_pdf(template: CertificateTemplate, name: str, college: str | None, team: str | None = None, *,
+               include_college: bool | None = None, include_team: bool | None = None) -> bytes:
+    """Overlay the participant's details. Include flags default to the template's saved settings."""
+    include_college = template.include_college if include_college is None else include_college
+    include_team = template.include_team if include_team is None else include_team
     if template.file_data is None:
         raise HTTPException(503, "Template file is unavailable; upload or replace the template")
     data = bytes(template.file_data)
@@ -57,10 +61,13 @@ def render_pdf(template: CertificateTemplate, name: str, college: str) -> bytes:
     if template.file_type != "pdf":
         from reportlab.lib.utils import ImageReader
         pdf.drawImage(ImageReader(io.BytesIO(data)), 0, 0, width=width, height=height)
-    for text, x_percent, y_percent, size, alignment, color, font in (
-        (name, template.name_x, template.name_y, template.name_font_size, template.name_alignment, template.name_color, "Helvetica-Bold"),
-        (college or "", template.college_x, template.college_y, template.college_font_size, template.college_alignment, template.college_color, "Helvetica"),
-    ):
+    lines = [(name, template.name_x, template.name_y, template.name_font_size, template.name_alignment, template.name_color, "Helvetica-Bold")]
+    # A missing value is skipped entirely, even when its line is included.
+    if include_college and college and college.strip():
+        lines.append((college, template.college_x, template.college_y, template.college_font_size, template.college_alignment, template.college_color, "Helvetica"))
+    if include_team and team and team.strip():
+        lines.append((team, template.team_x, template.team_y, template.team_font_size, template.team_alignment, template.team_color, "Helvetica"))
+    for text, x_percent, y_percent, size, alignment, color, font in lines:
         pdf.setFillColor(HexColor(color)); pdf.setFont(font, size)
         draw = {"left": pdf.drawString, "center": pdf.drawCentredString, "right": pdf.drawRightString}[alignment]
         draw(width * x_percent / 100, height * (1 - y_percent / 100), text)

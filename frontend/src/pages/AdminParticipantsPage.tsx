@@ -1,8 +1,13 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { api } from '../services/api'
+import { api, ApiError } from '../services/api'
 import { useAuth } from '../hooks/useAuth'
 import type { CsvParticipant, CsvParticipantPage, CsvPreview } from '../types/participant'
+
+type ParticipantField = 'name' | 'email' | 'team_name' | 'college'
+// A draft without an id is a new participant; with an id it edits an existing one.
+type ParticipantDraft = Pick<CsvParticipant, ParticipantField> & { id?: number }
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 export function AdminParticipantsPage() {
   const navigate = useNavigate()
@@ -21,8 +26,9 @@ export function AdminParticipantsPage() {
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
   const [reload, setReload] = useState(0)
-  const [editing, setEditing] = useState<CsvParticipant | null>(null)
+  const [editing, setEditing] = useState<ParticipantDraft | null>(null)
   const [editError, setEditError] = useState('')
+  const [fieldErrors, setFieldErrors] = useState<Partial<Record<ParticipantField, string>>>({})
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
@@ -68,15 +74,30 @@ export function AdminParticipantsPage() {
   async function saveEdit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!editing) return
-    setSaving(true); setEditError('')
+    const clean = (value: string | null) => (value ?? '').trim().replace(/\s+/g, ' ')
+    const person = { name: clean(editing.name), email: editing.email.trim().toLowerCase(),
+      team_name: clean(editing.team_name) || null, college: clean(editing.college) || null }
+    const problems: Partial<Record<ParticipantField, string>> = {}
+    if (!person.name) problems.name = 'Name is required.'
+    if (!person.email) problems.email = 'Email is required.'
+    else if (!EMAIL_PATTERN.test(person.email)) problems.email = 'Enter a valid email address, e.g. name@example.com.'
+    setFieldErrors(problems); setEditError('')
+    if (Object.keys(problems).length) return
+    setSaving(true)
     try {
-      const updated = await api.updateCsvParticipant(editing.id, {
-        name: editing.name.trim().replace(/\s+/g, ' '), email: editing.email.trim().toLowerCase(),
-        team_name: editing.team_name.trim().replace(/\s+/g, ' '), college: editing.college.trim().replace(/\s+/g, ' '),
-      })
-      setData(previous => previous ? { ...previous, items: previous.items.map(person => person.id === updated.id ? updated : person) } : previous)
-      setEditing(null); setMessage(`${updated.name} updated.`); setReload(value => value + 1)
-    } catch (err) { setEditError(err instanceof Error ? err.message : 'Could not update participant.') }
+      if (editing.id === undefined) {
+        const created = await api.createCsvParticipant(person)
+        setEditing(null); setMessage(`${created.name} added.`); setSearch(created.email); setPage(1); setReload(value => value + 1)
+      } else {
+        const updated = await api.updateCsvParticipant(editing.id, person)
+        setData(previous => previous ? { ...previous, items: previous.items.map(item => item.id === updated.id ? updated : item) } : previous)
+        setEditing(null); setMessage(`${updated.name} updated.`); setReload(value => value + 1)
+      }
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) setFieldErrors({ email: err.message })
+      else if (err instanceof ApiError && err.status === 422) setEditError('The server rejected these details. Check that the email address is valid and no field is longer than 160 characters.')
+      else setEditError(err instanceof Error ? err.message : 'Could not save participant.')
+    }
     finally { setSaving(false) }
   }
   async function clear() {
@@ -97,19 +118,19 @@ export function AdminParticipantsPage() {
     {canManage && <section className="admin-info-card csv-upload"><h2>UPLOAD PARTICIPANTS CSV</h2><p>Required columns: <code>name,email,team_name,college</code>. Common header variations are accepted.</p><div className="csv-file-row"><label className="button button-outline" htmlFor="participants-csv">CHOOSE FILE<input id="participants-csv" className="visually-hidden" type="file" accept=".csv,text/csv" onChange={event => { setFile(event.target.files?.[0] || null); setPreview(null) }} /></label><span>{file?.name || 'No file chosen'}</span><button className="button button-dark" type="button" disabled={!file || busy || legacyServer} onClick={() => void upload()}>{busy ? 'CHECKING…' : 'PREVIEW CSV'}</button></div><button className="text-action" type="button" onClick={sample}>DOWNLOAD SAMPLE CSV ↓</button></section>}
     {preview && <section className="admin-info-card"><h2>IMPORT PREVIEW</h2><div className="csv-counts"><strong>{preview.valid} valid</strong><strong>{preview.duplicates} duplicates</strong><strong>{preview.invalid} invalid</strong></div><div className="participant-table-wrap"><table className="participants-table csv-table"><thead><tr><th>LINE</th><th>NAME</th><th>EMAIL</th><th>TEAM</th><th>COLLEGE</th><th>STATUS / REASON</th></tr></thead><tbody>{preview.rows.map(row => <tr key={row.line}><td>{row.line}</td><td>{row.name || '—'}</td><td>{row.email || '—'}</td><td>{row.team_name || '—'}</td><td>{row.college || '—'}</td><td><strong>{row.status}</strong>{row.reason && <small>{row.reason}</small>}</td></tr>)}</tbody></table></div><div className="certificate-actions"><button type="button" onClick={() => setPreview(null)}>CANCEL</button><button type="button" disabled={busy || !preview.valid} onClick={() => void importCsv()}>{busy ? 'IMPORTING…' : `IMPORT ${preview.valid} PARTICIPANTS`}</button></div></section>}
     <section className="participant-panel csv-list">
-      <div className="participant-panel-heading"><span>IMPORTED PARTICIPANTS</span><span>{loading ? 'LOADING…' : listError ? 'UNAVAILABLE' : `${data?.total ?? 0} RESULTS`}</span></div>
+      <div className="participant-panel-heading"><span>IMPORTED PARTICIPANTS</span><span className="panel-heading-actions"><span>{loading ? 'LOADING…' : listError ? 'UNAVAILABLE' : `${data?.total ?? 0} RESULTS`}</span>{canManage && <button type="button" className="add-participant" disabled={legacyServer} onClick={() => { setEditing({ name: '', email: '', team_name: '', college: '' }); setEditError(''); setFieldErrors({}) }}>+ ADD PARTICIPANT</button>}</span></div>
       {loading ? <div className="participant-empty">Loading participants…</div>
         : listError ? <div className="participant-empty" role="alert"><strong>COULD NOT LOAD CSV PARTICIPANTS</strong><p>{listError}</p><button className="button button-outline" type="button" onClick={() => setReload(value => value + 1)}>TRY AGAIN →</button></div>
         : data?.total === 0 && !search ? <div className="participant-empty"><strong>NO PARTICIPANTS IMPORTED</strong><p>Choose a CSV above to start. The required columns are name, email, team name, and college.</p></div>
         : <>
           <div className="csv-toolbar"><input type="search" aria-label="Search participants" placeholder="Search name, email, team, college…" value={search} onChange={event => { setSearch(event.target.value); setPage(1) }} /><select aria-label="Sort participants" value={sort} onChange={event => { setSort(event.target.value); setPage(1) }}><option value="name:asc">Name A–Z</option><option value="name:desc">Name Z–A</option><option value="created_at:desc">Newest first</option><option value="college:asc">College A–Z</option><option value="team_name:asc">Team A–Z</option></select><span>{selected.size} selected</span><button type="button" onClick={() => setSelected(previous => new Set([...previous, ...pageIds]))}>SELECT ALL ON PAGE</button><button type="button" onClick={() => setSelected(new Set())}>DESELECT ALL</button></div>
-          <div className="participant-table-wrap"><table className="participants-table csv-table"><thead><tr><th><input type="checkbox" aria-label="Select all on page" checked={pageIds.length > 0 && pageIds.every(id => selected.has(id))} onChange={() => setSelected(previous => { const next = new Set(previous); if (pageIds.every(id => next.has(id))) pageIds.forEach(id => next.delete(id)); else pageIds.forEach(id => next.add(id)); return next })} /></th><th>NAME</th><th>EMAIL</th><th>TEAM NAME</th><th>COLLEGE</th>{canManage && <th>ACTION</th>}</tr></thead><tbody>{data?.items.map(person => <tr key={person.id}><td><input type="checkbox" aria-label={`Select ${person.name}`} checked={selected.has(person.id)} onChange={() => toggle(person.id)} /></td><td>{person.name}</td><td>{person.email}</td><td>{person.team_name}</td><td>{person.college}</td>{canManage && <td><button type="button" className="text-action" onClick={() => { setEditing({ ...person }); setEditError('') }}>EDIT</button> <button type="button" className="text-action" onClick={() => void remove(person.id, person.name)}>DELETE</button></td>}</tr>)}</tbody></table></div>
+          <div className="participant-table-wrap"><table className="participants-table csv-table"><thead><tr><th><input type="checkbox" aria-label="Select all on page" checked={pageIds.length > 0 && pageIds.every(id => selected.has(id))} onChange={() => setSelected(previous => { const next = new Set(previous); if (pageIds.every(id => next.has(id))) pageIds.forEach(id => next.delete(id)); else pageIds.forEach(id => next.add(id)); return next })} /></th><th>NAME</th><th>EMAIL</th><th>TEAM NAME</th><th>COLLEGE</th>{canManage && <th>ACTION</th>}</tr></thead><tbody>{data?.items.map(person => <tr key={person.id}><td><input type="checkbox" aria-label={`Select ${person.name}`} checked={selected.has(person.id)} onChange={() => toggle(person.id)} /></td><td>{person.name}</td><td>{person.email}</td><td>{person.team_name || '—'}</td><td>{person.college || '—'}</td>{canManage && <td><button type="button" className="text-action" onClick={() => { setEditing({ ...person }); setEditError(''); setFieldErrors({}) }}>EDIT</button> <button type="button" className="text-action" onClick={() => void remove(person.id, person.name)}>DELETE</button></td>}</tr>)}</tbody></table></div>
           {data?.items.length === 0 && <div className="participant-empty">No matching participants.</div>}
         </>}
     </section>
     {(data?.total_pages ?? 0) > 1 && <div className="participant-pagination"><span>PAGE {page} OF {data?.total_pages}</span><div><button disabled={page === 1} onClick={() => setPage(value => value - 1)}>PREVIOUS</button><button disabled={page === data?.total_pages} onClick={() => setPage(value => value + 1)}>NEXT</button></div></div>}
     {canManage && selected.size > 0 && <button type="button" className="button button-dark" onClick={() => navigate('/admin/email/compose', { state: { participantIds: [...selected] } })}>COMPOSE FOR {selected.size} SELECTED →</button>}
     {canManage && !!data?.total && <button type="button" className="text-action csv-clear" onClick={() => void clear()}>CLEAR PARTICIPANTS</button>}
-    {editing && <div className="edit-backdrop" onMouseDown={event => { if (event.target === event.currentTarget && !saving) setEditing(null) }}><form className="admin-info-card edit-participant" aria-label="Edit participant" onSubmit={event => void saveEdit(event)}><h2>EDIT PARTICIPANT</h2>{editError && <div className="form-error" role="alert">{editError}</div>}{([['name', 'Name'], ['email', 'Email'], ['team_name', 'Team Name'], ['college', 'College']] as const).map(([field, label]) => <label key={field}>{label}<input required maxLength={field === 'email' ? 320 : 160} type={field === 'email' ? 'email' : 'text'} value={editing[field]} onChange={event => setEditing(previous => previous ? { ...previous, [field]: event.target.value } : previous)} /></label>)}<div className="certificate-actions"><button type="button" disabled={saving} onClick={() => setEditing(null)}>CANCEL</button><button type="submit" disabled={saving}>{saving ? 'SAVING…' : 'SAVE'}</button></div></form></div>}
+    {editing && <div className="edit-backdrop" onMouseDown={event => { if (event.target === event.currentTarget && !saving) setEditing(null) }}><form className="admin-info-card edit-participant" aria-label={editing.id === undefined ? 'Add participant' : 'Edit participant'} noValidate onSubmit={event => void saveEdit(event)}><h2>{editing.id === undefined ? 'ADD PARTICIPANT' : 'EDIT PARTICIPANT'}</h2>{editError && <div className="form-error" role="alert">{editError}</div>}{([['name', 'Name', true], ['email', 'Email', true], ['team_name', 'Team Name', false], ['college', 'College Name', false]] as const).map(([field, label, required]) => <label key={field}>{label}{required ? ' *' : ' (optional)'}<input required={required} maxLength={field === 'email' ? 320 : 160} type={field === 'email' ? 'email' : 'text'} value={editing[field] ?? ''} aria-invalid={!!fieldErrors[field]} aria-describedby={fieldErrors[field] ? `${field}-error` : undefined} onChange={event => { const value = event.target.value; setEditing(previous => previous ? { ...previous, [field]: value } : previous); setFieldErrors(previous => ({ ...previous, [field]: undefined })) }} />{fieldErrors[field] && <small id={`${field}-error`} className="field-error" role="alert">{fieldErrors[field]}</small>}</label>)}<div className="certificate-actions"><button type="button" disabled={saving} onClick={() => setEditing(null)}>CANCEL</button><button type="submit" disabled={saving}>{saving ? 'SAVING…' : editing.id === undefined ? 'ADD PARTICIPANT' : 'SAVE'}</button></div></form></div>}
   </>
 }

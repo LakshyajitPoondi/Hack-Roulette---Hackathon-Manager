@@ -60,6 +60,7 @@ export const api = {
   csvParticipants: (search = '', sortBy = 'name', sortDir = 'asc', page = 1) => request<CsvParticipantPage>(`/api/participants?${new URLSearchParams({ search, sort_by: sortBy, sort_dir: sortDir, page: String(page), page_size: '50' })}`),
   allCsvParticipants: () => request<CsvParticipant[]>('/api/participants/all'),
   updateCsvParticipant: (id: number, changes: Pick<CsvParticipant, 'name' | 'email' | 'team_name' | 'college'>) => request<CsvParticipant>(`/api/participants/${id}`, { method: 'PATCH', body: JSON.stringify(changes) }),
+  createCsvParticipant: (person: Pick<CsvParticipant, 'name' | 'email' | 'team_name' | 'college'>) => request<CsvParticipant>('/api/participants', { method: 'POST', body: JSON.stringify(person) }),
   previewCsv: (file: File) => { const body = new FormData(); body.set('file', file); return request<CsvPreview>('/api/participants/import/preview', { method: 'POST', body }) },
   importCsv: (file: File, digest: string) => { const body = new FormData(); body.set('file', file); body.set('digest', digest); return request<CsvImportResult>('/api/participants/import', { method: 'POST', body }) },
   deleteCsvParticipant: (id: number) => request<void>(`/api/participants/${id}`, { method: 'DELETE' }),
@@ -123,10 +124,10 @@ export async function certificatePdf(path: string, download = false) {
   }
 }
 
-export async function manualCertificatePdf(participant_name: string, college_name: string, download = false) {
+export async function manualCertificatePdf(participant_name: string, college_name: string, team_name: string, download = false) {
   const previewTab = download ? null : window.open('', '_blank')
   let response: Response
-  try { response = await fetch(`${apiUrl}/api/certificates/manual?download=${download}`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ participant_name, college_name }) }) }
+  try { response = await fetch(`${apiUrl}/api/certificates/manual?download=${download}`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ participant_name, college_name, team_name }) }) }
   catch { previewTab?.close(); throw new ApiError(0, unavailable('/api/certificates/manual')) }
   if (!response.ok) { previewTab?.close(); throw await failure(response, '/api/certificates/manual') }
   const url = URL.createObjectURL(await response.blob())

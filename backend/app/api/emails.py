@@ -177,7 +177,7 @@ def delete_template(template_id: int, db: Database, _: Admin):
 def preview_email(payload: PreviewInput, db: Database, _: Admin):
     if payload.participant_id is not None:
         person = get_person(db, payload.participant_id)
-        values = {"participant_name": person.name, "college_name": person.college}
+        values = {"participant_name": person.name, "college_name": person.college or ""}
         try:
             return {"subject": render(payload.subject, values), "body": render(payload.body, values)}
         except ValueError as exc:
@@ -195,9 +195,9 @@ def test_email(payload: TestInput, db: Database, _: Admin):
         from app.services.email_delivery import filename
         person = get_person(db, payload.participant_id)
         if payload.attach_certificate:
-            attachment = render_pdf(active_template(db), person.name, person.college)
+            attachment = render_pdf(active_template(db), person.name, person.college, person.team_name)
             attachment_name = filename(person.name)
-        values = {"participant_name": person.name, "college_name": person.college}
+        values = {"participant_name": person.name, "college_name": person.college or ""}
         rendered = {"subject": render(payload.subject, values), "body": render(payload.body, values)}
     try:
         message_id = provider().send(to=to, sender_name=payload.sender_name, reply_to=reply,
@@ -250,9 +250,11 @@ def create_campaign(payload: CampaignInput, db: Database, actor: Admin):
         raise HTTPException(422, "No eligible recipients have a valid email address")
     if payload.expected_recipients is not None and len(result["ready"]) != payload.expected_recipients:
         raise HTTPException(409, "Recipient count changed since review. Review the send again.")
-    template_id = active_template(db).id if payload.attach_certificate else None
+    template = active_template(db) if payload.attach_certificate else None
     item = EmailCampaign(name=payload.name.strip(), email_template_id=payload.email_template_id,
-                         certificate_template_id=template_id,
+                         certificate_template_id=template.id if template else None,
+                         certificate_include_college=template.include_college if template else True,
+                         certificate_include_team=template.include_team if template else False,
                          sender_name=payload.sender_name.strip(), reply_to=reply, subject=payload.subject,
                          body=payload.body, attach_certificate=payload.attach_certificate,
                          allow_resend=payload.resend and payload.send_to == "all",

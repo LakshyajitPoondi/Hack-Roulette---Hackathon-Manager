@@ -252,3 +252,30 @@ def test_pending_delivery_uses_latest_participant_details(client, make_user, log
     assert sent[-1]["to"] == "updated@example.com"
     assert sent[-1]["subject"] == "Hi Updated Person"
     assert sent[-1]["body"] == "At Updated College"
+
+
+def test_campaign_keeps_certificate_settings_it_started_with(client, db, make_user, login, fake_sheet, monkeypatch):
+    from app.services import campaign_processor
+    from pypdf import PdfReader
+    admin = make_user(Role.ADMIN, "snapshot@example.com"); login(admin.email)
+    fake_sheet.people = [fake_sheet.make(i, f"Person {i}", f"person{i}@example.com") for i in range(2, 13)]
+    template = CertificateTemplate(name="Certificate", file_data=png(), file_type="png", is_active=True,
+                                   created_by=admin.id, include_team=True)
+    db.add(template); db.commit()
+    sent = []
+    class Provider:
+        def send(self, **kwargs):
+            sent.append(kwargs)
+            return "provider-123"
+    monkeypatch.setattr(campaign_processor, "provider", lambda: Provider())
+    response = client.post("/api/email/campaigns", json={"name": "Snapshot", "sender_name": "Tech Roulette",
+        "subject": "Hi [name]", "body": "Certificate attached", "selection": "all", "confirmed": True})
+    assert response.status_code == 201 and response.json()["status"] == "PROCESSING"
+    # Editing the template between batches must not change the rest of this campaign.
+    assert client.patch(f"/api/certificates/templates/{template.id}",
+                        json={"include_college": False, "include_team": False}).status_code == 200
+    assert client.post(f"/api/email/campaigns/{response.json()['id']}/continue").status_code == 200
+    assert len(sent) == 11
+    for message in sent:
+        content = PdfReader(io.BytesIO(message["attachment"])).pages[0].extract_text()
+        assert "Team Test" in content and "Example College" in content

@@ -23,13 +23,18 @@ class ParticipantEdit(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=1, max_length=160)
     email: EmailStr
-    team_name: str = Field(min_length=1, max_length=160)
-    college: str = Field(min_length=1, max_length=160)
+    team_name: str | None = Field(default=None, max_length=160)
+    college: str | None = Field(default=None, max_length=160)
 
     @field_validator("name", "team_name", "college", mode="before")
     @classmethod
     def clean_text(cls, value: str) -> str:
         return " ".join(value.split()) if isinstance(value, str) else value
+
+    @field_validator("team_name", "college", mode="after")
+    @classmethod
+    def blank_to_none(cls, value: str | None) -> str | None:
+        return value or None
 
     @field_validator("email", mode="after")
     @classmethod
@@ -43,6 +48,21 @@ def participants(db: Database, _: Reader, search: str = Query(default="", max_le
                  sort_dir: Literal["asc", "desc"] = "asc", page: int = Query(default=1, ge=1),
                  page_size: int = Query(default=50, ge=1, le=500)):
     return list_people(db, search, sort_by, sort_dir, page, page_size)
+
+
+@router.post("", status_code=201)
+def create_participant(payload: ParticipantEdit, db: Database, _: Manager):
+    if db.scalar(select(Participant.id).where(Participant.email == payload.email)) is not None:
+        raise HTTPException(409, "A participant with this email already exists.")
+    person = Participant(**payload.model_dump())
+    db.add(person)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "A participant with this email already exists.") from None
+    db.refresh(person)
+    return person
 
 
 @router.get("/all")

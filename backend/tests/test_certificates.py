@@ -25,3 +25,32 @@ def test_template_two_fields_and_on_demand_pdf(client, make_user, login, fake_sh
     assert "Alex Johnson" in pdf_text and "Example College" in pdf_text
     row = client.get("/api/certificates/participants/2").json()
     assert row["status"] == "READY" and "certificate_id" not in row
+
+
+def test_include_settings_and_missing_participant_details(client, make_user, login):
+    admin = make_user(Role.ADMIN, "include@example.com"); login(admin.email)
+    uploaded = client.post("/api/certificates/templates", data={"name": "Participation"}, files={"file": ("art.png", png(), "image/png")})
+    template_id = uploaded.json()["id"]
+    assert (uploaded.json()["include_college"], uploaded.json()["include_team"]) == (True, False)
+    assert client.post(f"/api/certificates/templates/{template_id}/activate").status_code == 200
+    full = client.post("/api/participants", json={"name": "Alex Johnson", "email": "alex@example.com",
+                                                  "team_name": "Team Nova", "college": "Example College"}).json()
+    bare = client.post("/api/participants", json={"name": "Riya Sen", "email": "riya@example.com"}).json()
+
+    def text(participant_id):
+        response = client.get(f"/api/certificates/participants/{participant_id}/download")
+        assert response.status_code == 200
+        return PdfReader(io.BytesIO(response.content)).pages[0].extract_text()
+
+    for include_college, include_team in ((True, False), (True, True), (False, True), (False, False)):
+        updated = client.patch(f"/api/certificates/templates/{template_id}",
+                               json={"include_college": include_college, "include_team": include_team, "team_y": 82})
+        assert updated.status_code == 200 and updated.json()["team_y"] == 82
+        content = text(full["id"])
+        assert "Alex Johnson" in content
+        assert ("Example College" in content) == include_college
+        assert ("Team Nova" in content) == include_team
+        assert text(bare["id"]).strip() == "Riya Sen"
+    manual = client.post("/api/certificates/manual", json={"participant_name": "Solo Person"})
+    assert manual.status_code == 200
+    assert PdfReader(io.BytesIO(manual.content)).pages[0].extract_text().strip() == "Solo Person"

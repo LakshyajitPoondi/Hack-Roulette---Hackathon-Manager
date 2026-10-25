@@ -13,6 +13,13 @@ export interface CertificateTemplate {
   college_font_size: number
   college_alignment: 'left' | 'center' | 'right'
   college_color: string
+  team_x: number
+  team_y: number
+  team_font_size: number
+  team_alignment: 'left' | 'center' | 'right'
+  team_color: string
+  include_college: boolean
+  include_team: boolean
   created_by: number
   created_at: string
   updated_at: string

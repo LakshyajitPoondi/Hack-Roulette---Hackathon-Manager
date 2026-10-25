@@ -79,7 +79,7 @@ def delete_template(template_id: int, db: Database, _: Admin):
 
 @router.get("/templates/{template_id}/preview")
 def preview_template(template_id: int, db: Database, _: Admin):
-    pdf = service.render_pdf(service.get_template(db, template_id), "ALEX JOHNSON", "EXAMPLE COLLEGE")
+    pdf = service.render_pdf(service.get_template(db, template_id), "ALEX JOHNSON", "EXAMPLE COLLEGE", "TEAM NOVA")
     return Response(pdf, media_type="application/pdf", headers={"Content-Disposition": 'inline; filename="certificate-preview.pdf"'})
 
 
@@ -93,12 +93,14 @@ def template_file(template_id: int, db: Database, _: Admin):
 
 class ManualCertificate(BaseModel):
     participant_name: str = Field(min_length=1, max_length=160)
-    college_name: str = Field(min_length=1, max_length=160)
+    college_name: str = Field(default="", max_length=160)
+    team_name: str = Field(default="", max_length=160)
 
 
 @router.post("/manual")
 def manual_certificate(payload: ManualCertificate, db: Database, _: Admin, download: bool = False):
-    pdf = service.render_pdf(service.active_template(db), payload.participant_name.strip(), payload.college_name.strip())
+    pdf = service.render_pdf(service.active_template(db), payload.participant_name.strip(), payload.college_name.strip(),
+                             payload.team_name.strip())
     disposition = "attachment" if download else "inline"
     return Response(pdf, media_type="application/pdf", headers={"Content-Disposition": f'{disposition}; filename="certificate.pdf"'})
 
@@ -129,7 +131,7 @@ def participant_certificate(participant_id: int, db: Database, _: Admin):
 @router.get("/participants/{participant_id}/download")
 def download_certificate(participant_id: int, db: Database, _: Admin, download: bool = False):
     person = get_person(db, participant_id)
-    data = service.render_pdf(service.active_template(db), person.name, person.college)
+    data = service.render_pdf(service.active_template(db), person.name, person.college, person.team_name)
     disposition = "attachment" if download else "inline"
     return Response(data, media_type="application/pdf",
                     headers={"Content-Disposition": f'{disposition}; filename="certificate-{participant_id}.pdf"'})

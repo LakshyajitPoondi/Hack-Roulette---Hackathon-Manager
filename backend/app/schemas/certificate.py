@@ -16,6 +16,13 @@ class TemplateUpdate(BaseModel):
     college_font_size: int | None = Field(default=None, ge=8, le=200)
     college_alignment: Literal["left", "center", "right"] | None = None
     college_color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
+    team_x: float | None = Field(default=None, ge=0, le=100)
+    team_y: float | None = Field(default=None, ge=0, le=100)
+    team_font_size: int | None = Field(default=None, ge=8, le=200)
+    team_alignment: Literal["left", "center", "right"] | None = None
+    team_color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
+    include_college: bool | None = None
+    include_team: bool | None = None
 
 
 class TemplateRead(BaseModel):
@@ -34,6 +41,13 @@ class TemplateRead(BaseModel):
     college_font_size: int
     college_alignment: str
     college_color: str
+    team_x: float
+    team_y: float
+    team_font_size: int
+    team_alignment: str
+    team_color: str
+    include_college: bool
+    include_team: bool
     created_by: int
     created_at: datetime
     updated_at: datetime

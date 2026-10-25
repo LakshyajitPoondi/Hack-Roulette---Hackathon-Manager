@@ -1,5 +1,5 @@
 export type AttendanceStatus = 'REGISTERED' | 'PRESENT' | 'ABSENT'
-export interface CsvParticipant { id: number; name: string; email: string; team_name: string; college: string; created_at: string }
+export interface CsvParticipant { id: number; name: string; email: string; team_name: string | null; college: string | null; created_at: string }
 export interface CsvParticipantPage { source: 'csv'; items: CsvParticipant[]; page: number; page_size: number; total: number; total_pages: number }
 export interface CsvPreviewRow { line: number; name: string; email: string; team_name: string; college: string; status: 'VALID' | 'DUPLICATE' | 'INVALID'; reason: string }
 export interface CsvPreview { digest: string; rows: CsvPreviewRow[]; valid: number; duplicates: number; invalid: number }

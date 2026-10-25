@@ -51,6 +51,7 @@ def process_campaign(db: Session, campaign_id: int, limit: int) -> int:
                 continue
             delivery.attempt_count += 1
             person = db.get(Participant, delivery.participant_id)
+            team = person.team_name if person is not None else None
             if person is not None:
                 delivery.participant_name = person.name
                 delivery.college = person.college
@@ -60,7 +61,9 @@ def process_campaign(db: Session, campaign_id: int, limit: int) -> int:
                 template = db.get(CertificateTemplate, campaign.certificate_template_id)
                 if not template:
                     raise FileNotFoundError("Certificate template is missing")
-                pdf = render_pdf(template, delivery.participant_name, delivery.college or "")
+                pdf = render_pdf(template, delivery.participant_name, delivery.college, team,
+                                 include_college=campaign.certificate_include_college,
+                                 include_team=campaign.certificate_include_team)
             values = {"participant_name": delivery.participant_name, "college_name": delivery.college or ""}
             message_id = provider().send(
                 to=delivery.email, recipient_name=delivery.participant_name,

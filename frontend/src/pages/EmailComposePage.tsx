@@ -35,7 +35,7 @@ export function EmailComposePage() {
     })
   }
   useEffect(() => { loadRecipients(); api.emailTemplates().then(setTemplates).catch(err => setError(err.message)); api.emailMode().then(value => setMode(value.mode)).catch(err => setError(err.message)) }, [])
-  const filtered = useMemo(() => people.filter(person => `${person.name} ${person.email} ${person.college} ${person.team_name}`.toLocaleLowerCase().includes(search.toLocaleLowerCase())), [people, search])
+  const filtered = useMemo(() => people.filter(person => `${person.name} ${person.email} ${person.college ?? ''} ${person.team_name ?? ''}`.toLocaleLowerCase().includes(search.toLocaleLowerCase())), [people, search])
   const chosen = people.filter(person => selected.has(person.id))
   function toggle(id: number) { setSelected(previous => { const next = new Set(previous); if (next.has(id)) next.delete(id); else next.add(id); return next }); setReview(null); setEmailPreview(null) }
   function selectTemplate(id: string) { const template = templates.find(item => item.id === Number(id)); if (template) { setSubject(template.subject); setBody(template.body) } setReview(null); setEmailPreview(null) }
@@ -44,7 +44,7 @@ export function EmailComposePage() {
     setBusy(true); setError('')
     try {
       const rendered = await api.emailPreview(subject, body, chosen[0].id)
-      setEmailPreview({ ...rendered, participant: `${chosen[0].name} · ${chosen[0].college}` })
+      setEmailPreview({ ...rendered, participant: [chosen[0].name, chosen[0].college].filter(Boolean).join(' · ') })
     } catch (err) { setError(err instanceof Error ? err.message : 'Could not preview email.') }
     finally { setBusy(false) }
   }
@@ -98,7 +98,7 @@ export function EmailComposePage() {
     <div className="admin-page-heading"><div><span className="eyebrow">/ STEPS 5–8</span><h1>COMPOSE EMAIL<span>.</span></h1><p>Select recipients, write a message, review, and send.</p></div><Link className="button button-outline" to="/admin/email/campaigns">SEND HISTORY →</Link></div>
     {error && <div className="form-error" role="alert">{error}</div>}{message && <div className="form-success" role="status">{message}</div>}
     {mode === 'development' && <div className="admin-notice"><span>ⓘ</span><p>Email is in development mode. Sends are simulated until EMAIL_MODE is set to production.</p></div>}
-    <section className="admin-info-card"><h2>1. SELECT RECIPIENTS</h2>{recipientState === 'loading' ? <p>Loading imported participants…</p> : recipientState === 'error' ? <div role="alert"><p>{recipientError}</p><button className="button button-outline" type="button" onClick={loadRecipients}>TRY AGAIN →</button></div> : people.length === 0 ? <p>No participants imported. <Link to="/admin/participants">Upload a CSV →</Link></p> : <><div className="csv-toolbar"><input type="search" aria-label="Search recipients" placeholder="Search participants…" value={search} onChange={event => setSearch(event.target.value)} /><button type="button" onClick={() => { setSelected(previous => new Set([...previous, ...filtered.map(person => person.id)])); setReview(null) }}>SELECT ALL{search && ' MATCHING'}</button><button type="button" onClick={() => { setSelected(new Set()); setReview(null) }}>DESELECT ALL</button><strong>{chosen.length} PARTICIPANTS SELECTED</strong></div><div className="email-people">{filtered.map(person => <label key={person.id}><input type="checkbox" checked={selected.has(person.id)} onChange={() => toggle(person.id)} /><span><strong>{person.name}</strong><small>{person.email} · {person.college} · {person.team_name}</small></span></label>)}</div></>}</section>
+    <section className="admin-info-card"><h2>1. SELECT RECIPIENTS</h2>{recipientState === 'loading' ? <p>Loading imported participants…</p> : recipientState === 'error' ? <div role="alert"><p>{recipientError}</p><button className="button button-outline" type="button" onClick={loadRecipients}>TRY AGAIN →</button></div> : people.length === 0 ? <p>No participants imported. <Link to="/admin/participants">Upload a CSV →</Link></p> : <><div className="csv-toolbar"><input type="search" aria-label="Search recipients" placeholder="Search participants…" value={search} onChange={event => setSearch(event.target.value)} /><button type="button" onClick={() => { setSelected(previous => new Set([...previous, ...filtered.map(person => person.id)])); setReview(null) }}>SELECT ALL{search && ' MATCHING'}</button><button type="button" onClick={() => { setSelected(new Set()); setReview(null) }}>DESELECT ALL</button><strong>{chosen.length} PARTICIPANTS SELECTED</strong></div><div className="email-people">{filtered.map(person => <label key={person.id}><input type="checkbox" checked={selected.has(person.id)} onChange={() => toggle(person.id)} /><span><strong>{person.name}</strong><small>{[person.email, person.college, person.team_name].filter(Boolean).join(' · ')}</small></span></label>)}</div></>}</section>
     {recipientState === 'ready' && chosen.length > 0 && <section className="admin-info-card email-form">
       <h2>2. WRITE EMAIL</h2>
       {templates.length > 0 && <label>Email template (optional)<select defaultValue="" onChange={event => selectTemplate(event.target.value)}><option value="">Custom message</option>{templates.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}

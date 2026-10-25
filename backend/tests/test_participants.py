@@ -139,5 +139,35 @@ def test_admin_can_edit_csv_participant_and_duplicate_email_is_rejected(client, 
         "name": "Alex Johnson", "email": "new@example.com", "team_name": "Team Nova", "college": "XYZ University"}
     assert client.get("/api/participants/2").json()["college"] == "XYZ University"
     assert client.patch("/api/participants/2", json={**changes, "email": "meera@example.com"}).status_code == 409
-    assert client.patch("/api/participants/2", json={**changes, "college": " "}).status_code == 422
+    assert client.patch("/api/participants/2", json={**changes, "name": " "}).status_code == 422
+    assert client.patch("/api/participants/2", json={**changes, "college": " "}).json()["college"] is None
     assert client.patch("/api/participants/2", json={**changes, "created_at": "2020-01-01"}).status_code == 422
+
+
+def test_admin_can_add_participant_manually(client, make_user, login):
+    make_user(Role.STAFF, "staff-add@example.com")
+    make_user(Role.ADMIN, "admin-add@example.com")
+    person = {"name": "  Riya   Sen ", "email": " Riya@Example.com ", "team_name": "  ", "college": None}
+    login("staff-add@example.com")
+    assert client.post("/api/participants", json=person).status_code == 403
+    login("admin-add@example.com")
+    created = client.post("/api/participants", json=person)
+    assert created.status_code == 201, created.text
+    assert {key: created.json()[key] for key in person} == {
+        "name": "Riya Sen", "email": "riya@example.com", "team_name": None, "college": None}
+    listed = client.get("/api/participants", params={"search": "riya@example.com"}).json()
+    assert listed["total"] == 1 and listed["items"][0]["id"] == created.json()["id"]
+    full = client.post("/api/participants", json={"name": "Dev", "email": "dev@example.com", "team_name": " Team  Nova ", "college": "ABC College"})
+    assert full.status_code == 201 and (full.json()["team_name"], full.json()["college"]) == ("Team Nova", "ABC College")
+    duplicate = client.post("/api/participants", json={**person, "email": "RIYA@example.COM"})
+    assert duplicate.status_code == 409 and "already exists" in duplicate.json()["detail"]
+    for invalid in ({**person, "name": " "}, {**person, "email": "not-an-email"}, {**person, "email": ""},
+                    {"email": "solo@example.com"}, {**person, "email": "new@example.com", "id": 99},
+                    {**person, "email": "long@example.com", "college": "x" * 161}):
+        assert client.post("/api/participants", json=invalid).status_code == 422
+    edited = client.patch(f"/api/participants/{created.json()['id']}", json={**person, "team_name": "Orbit"})
+    assert edited.status_code == 200 and edited.json()["team_name"] == "Orbit"
+    # CSV import keeps requiring team and college.
+    csv_data = b"name,email,team_name,college\nNo Team,noteam@example.com,,ABC College\n"
+    preview = client.post("/api/participants/import/preview", files={"file": ("people.csv", csv_data)}).json()
+    assert preview["rows"][0]["status"] == "INVALID" and "Missing team name" in preview["rows"][0]["reason"]
