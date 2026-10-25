@@ -71,7 +71,7 @@ export function AdminCertificateTemplatesPage() {
     const observer = new ResizeObserver(() => setDisplayWidth(stage.clientWidth))
     observer.observe(stage)
     return () => observer.disconnect()
-  }, [selectedId])
+  }, [template?.id])
 
   async function act(action: () => Promise<unknown>, success: string) {
     setBusy(true); setError(''); setMessage('')
