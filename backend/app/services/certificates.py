@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.certificate import CertificateTemplate
+from app.services.certificate_fonts import pdf_font
 
 MAX_TEMPLATE_BYTES = 10 * 1024 * 1024
 
@@ -61,12 +62,17 @@ def render_pdf(template: CertificateTemplate, name: str, college: str | None, te
     if template.file_type != "pdf":
         from reportlab.lib.utils import ImageReader
         pdf.drawImage(ImageReader(io.BytesIO(data)), 0, 0, width=width, height=height)
-    lines = [(name, template.name_x, template.name_y, template.name_font_size, template.name_alignment, template.name_color, "Helvetica-Bold")]
+    def line(text: str, field: str):
+        value = lambda key: getattr(template, f"{field}_{key}")
+        font = pdf_font(value("font_family"), value("bold"), value("italic"))
+        return text, value("x"), value("y"), value("font_size"), value("alignment"), value("color"), font
+
+    lines = [line(name, "name")]
     # A missing value is skipped entirely, even when its line is included.
     if include_college and college and college.strip():
-        lines.append((college, template.college_x, template.college_y, template.college_font_size, template.college_alignment, template.college_color, "Helvetica"))
+        lines.append(line(college, "college"))
     if include_team and team and team.strip():
-        lines.append((team, template.team_x, template.team_y, template.team_font_size, template.team_alignment, template.team_color, "Helvetica"))
+        lines.append(line(team, "team"))
     for text, x_percent, y_percent, size, alignment, color, font in lines:
         pdf.setFillColor(HexColor(color)); pdf.setFont(font, size)
         draw = {"left": pdf.drawString, "center": pdf.drawCentredString, "right": pdf.drawRightString}[alignment]

@@ -1,7 +1,7 @@
 -- Tech Roulette: current FastAPI/SQLAlchemy schema for Supabase Postgres.
 -- Creates the current schema on a fresh project and adds the CSV participant
 -- table, allow_resend, optional participant team/college, and certificate
--- team-line settings to an existing database. Safe to run more than once.
+-- team-line and font settings to an existing database. Safe to run more than once.
 -- CSV-imported participants live in Postgres; personalized certificates are rendered in memory.
 -- Run in the Supabase SQL Editor before starting or deploying the backend.
 
@@ -72,6 +72,15 @@ CREATE TABLE IF NOT EXISTS public.certificate_templates (
     team_color          VARCHAR(7) NOT NULL DEFAULT '#171717',
     include_college     BOOLEAN NOT NULL DEFAULT TRUE,
     include_team        BOOLEAN NOT NULL DEFAULT FALSE,
+    name_font_family    VARCHAR(40) NOT NULL DEFAULT 'helvetica',
+    name_bold           BOOLEAN NOT NULL DEFAULT TRUE,
+    name_italic         BOOLEAN NOT NULL DEFAULT FALSE,
+    college_font_family VARCHAR(40) NOT NULL DEFAULT 'helvetica',
+    college_bold        BOOLEAN NOT NULL DEFAULT FALSE,
+    college_italic      BOOLEAN NOT NULL DEFAULT FALSE,
+    team_font_family    VARCHAR(40) NOT NULL DEFAULT 'helvetica',
+    team_bold           BOOLEAN NOT NULL DEFAULT FALSE,
+    team_italic         BOOLEAN NOT NULL DEFAULT FALSE,
     created_by          INTEGER NOT NULL REFERENCES public.users (id),
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -86,6 +95,18 @@ ALTER TABLE public.certificate_templates
     ADD COLUMN IF NOT EXISTS team_color VARCHAR(7) NOT NULL DEFAULT '#171717',
     ADD COLUMN IF NOT EXISTS include_college BOOLEAN NOT NULL DEFAULT TRUE,
     ADD COLUMN IF NOT EXISTS include_team BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- Per-field fonts. Defaults match the original look: Helvetica Bold name, Helvetica college and team.
+ALTER TABLE public.certificate_templates
+    ADD COLUMN IF NOT EXISTS name_font_family VARCHAR(40) NOT NULL DEFAULT 'helvetica',
+    ADD COLUMN IF NOT EXISTS name_bold BOOLEAN NOT NULL DEFAULT TRUE,
+    ADD COLUMN IF NOT EXISTS name_italic BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS college_font_family VARCHAR(40) NOT NULL DEFAULT 'helvetica',
+    ADD COLUMN IF NOT EXISTS college_bold BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS college_italic BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS team_font_family VARCHAR(40) NOT NULL DEFAULT 'helvetica',
+    ADD COLUMN IF NOT EXISTS team_bold BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS team_italic BOOLEAN NOT NULL DEFAULT FALSE;
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_certificate_template_active
     ON public.certificate_templates (is_active)

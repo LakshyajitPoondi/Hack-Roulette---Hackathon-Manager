@@ -6,6 +6,7 @@
   "functions": {
     "api/index.py": {
       "maxDuration": 300,
+      "includeFiles": "backend/app/fonts/**",
       "excludeFiles": "{backend/tests/**,frontend/**,docs/**}"
     }
   },

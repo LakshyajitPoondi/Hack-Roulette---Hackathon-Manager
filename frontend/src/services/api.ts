@@ -1,7 +1,7 @@
 import { apiUrl } from '../config/env'
 import type { AdminUser, DashboardData, Role } from '../types/admin'
 import type { BulkAction, FilterOptions, Participant, ParticipantChanges, ParticipantFilters, ParticipantPage, CsvParticipant, CsvParticipantPage, CsvPreview, CsvImportResult } from '../types/participant'
-import type { CertificateRow, CertificateTemplate } from '../types/certificate'
+import type { CertificateFont, CertificateRow, CertificateTemplate } from '../types/certificate'
 import type { Campaign, CampaignInput, EmailTemplate, RecipientSelection, RecipientSummary } from '../types/email'
 
 export class ApiError extends Error {
@@ -70,6 +70,7 @@ export const api = {
   updateParticipant: (id: number, changes: ParticipantChanges) => request<Participant>(`/api/participants/${id}`, { method: 'PATCH', body: JSON.stringify(changes) }),
   bulkParticipants: (participant_ids: number[], action: BulkAction) => request<{ updated_count: number }>('/api/participants/bulk-update', { method: 'POST', body: JSON.stringify({ participant_ids, action }) }),
   templates: () => request<CertificateTemplate[]>('/api/certificates/templates'),
+  certificateFonts: () => request<CertificateFont[]>('/api/certificates/fonts'),
   manualStatus: () => request<{ template_ready: boolean; email_mode: string; brevo_configured: boolean }>('/api/email/manual/status'),
   manualSend: (data: { to: string; participant_name: string; college_name: string; subject: string; body: string; attach_certificate: boolean }) => request<{ recipient: string; message_id: string; status: string }>('/api/email/manual/send', { method: 'POST', body: JSON.stringify(data) }),
   uploadTemplate: (name: string, file: File) => { const body = new FormData(); body.set('name', name); body.set('file', file); return request<CertificateTemplate>('/api/certificates/templates', { method: 'POST', body }) },

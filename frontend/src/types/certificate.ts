@@ -20,9 +20,29 @@ export interface CertificateTemplate {
   team_color: string
   include_college: boolean
   include_team: boolean
+  name_font_family: string
+  name_bold: boolean
+  name_italic: boolean
+  college_font_family: string
+  college_bold: boolean
+  college_italic: boolean
+  team_font_family: string
+  team_bold: boolean
+  team_italic: boolean
   created_by: number
   created_at: string
   updated_at: string
+}
+
+export type FontStyle = 'regular' | 'bold' | 'italic' | 'bold_italic'
+
+export interface CertificateFont {
+  key: string
+  label: string
+  category: string
+  styles: FontStyle[]
+  preview_files: Partial<Record<FontStyle, string>>
+  preview_fallback: string
 }
 
 export interface CertificateRow {

@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState, type FormEvent, type PointerEvent } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type PointerEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import { api, certificatePdf } from '../services/api'
 import { apiUrl } from '../config/env'
-import type { CertificateTemplate } from '../types/certificate'
+import type { CertificateFont, CertificateTemplate, FontStyle } from '../types/certificate'
 
 GlobalWorkerOptions.workerSrc = workerUrl
 type Field = 'name' | 'college' | 'team'
@@ -12,6 +12,24 @@ const fieldLabels: Record<Field, { legend: string; sample: string }> = {
   name: { legend: 'Participant name', sample: 'SAMPLE PARTICIPANT NAME' },
   college: { legend: 'College name', sample: 'SAMPLE COLLEGE NAME' },
   team: { legend: 'Team name', sample: 'SAMPLE TEAM NAME' },
+}
+
+function styleName(bold: boolean, italic: boolean): FontStyle {
+  return bold && italic ? 'bold_italic' : bold ? 'bold' : italic ? 'italic' : 'regular'
+}
+
+// Registers the same TTF files the PDF embeds. The browser downloads a face only once text uses it.
+const registeredFaces = new Set<string>()
+function registerPreviewFonts(fonts: CertificateFont[]) {
+  for (const font of fonts) {
+    for (const [style, path] of Object.entries(font.preview_files)) {
+      const key = `${font.key}:${style}`
+      if (registeredFaces.has(key)) continue
+      registeredFaces.add(key)
+      document.fonts.add(new FontFace(`cert-${font.key}`, `url(${apiUrl}${path})`, {
+        weight: style.startsWith('bold') ? '700' : '400', style: style.endsWith('italic') ? 'italic' : 'normal' }))
+    }
+  }
 }
 
 export function AdminCertificateTemplatesPage() {
@@ -30,7 +48,24 @@ export function AdminCertificateTemplatesPage() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
+  const [fonts, setFonts] = useState<CertificateFont[]>([])
+  const [, setFontsLoaded] = useState(0) // re-render (and re-measure baselines) when a font face finishes loading
+  const [baselines, setBaselines] = useState<Record<Field, number>>({ name: 0, college: 0, team: 0 })
+  const baselineMarkers = useRef<Partial<Record<Field, HTMLSpanElement | null>>>({})
   const template = templates.find(item => item.id === selectedId)
+
+  useEffect(() => {
+    api.certificateFonts().then(items => { registerPreviewFonts(items); setFonts(items) }).catch(err => setError(err.message))
+    const loaded = () => setFontsLoaded(value => value + 1)
+    document.fonts.addEventListener('loadingdone', loaded)
+    return () => document.fonts.removeEventListener('loadingdone', loaded)
+  }, [])
+  // The PDF draws text on its baseline at the saved point, so each preview label is lifted by its measured baseline.
+  useLayoutEffect(() => {
+    const next = { name: 0, college: 0, team: 0 }
+    for (const field of ['name', 'college', 'team'] as const) next[field] = baselineMarkers.current[field]?.offsetTop ?? 0
+    setBaselines(previous => (['name', 'college', 'team'] as const).every(field => previous[field] === next[field]) ? previous : next)
+  })
 
   useEffect(() => { api.templates().then(items => { setTemplates(items); setSelectedId(id => id && items.some(item => item.id === id) ? id : (items.find(item => item.is_active) || items[0])?.id || null) }).catch(err => setError(err.message)) }, [revision])
   useEffect(() => {
@@ -106,6 +141,21 @@ export function AdminCertificateTemplatesPage() {
       .then(() => setMessage('Position saved.'))
       .catch(err => setError(err instanceof Error ? err.message : 'Position could not be saved'))
   }
+  const fontFor = (field: Field) => fonts.find(font => font.key === template?.[`${field}_font_family`])
+  function previewFamily(field: Field) {
+    const font = fontFor(field)
+    if (!font) return 'Arial, Helvetica, sans-serif'
+    return Object.keys(font.preview_files).length ? `"cert-${font.key}", ${font.preview_fallback}` : font.preview_fallback
+  }
+  function changeFamily(field: Field, family: string) {
+    if (!template) return
+    const styles = fonts.find(font => font.key === family)?.styles ?? []
+    let bold = template[`${field}_bold`], italic = template[`${field}_italic`]
+    // Keep the chosen style when the new family has it; otherwise drop italic, then bold.
+    if (!styles.includes(styleName(bold, italic))) italic = styles.includes(styleName(bold, false)) ? false : italic
+    if (!styles.includes(styleName(bold, italic))) { bold = false; italic = styles.includes('italic') && italic }
+    edit({ [`${field}_font_family`]: family, [`${field}_bold`]: bold, [`${field}_italic`]: italic })
+  }
   const scale = displayWidth / dimensions.width
   return <>
     <div className="admin-page-heading"><div><span className="eyebrow">/ STEP 3</span><h1>CERTIFICATE TEMPLATE<span>.</span></h1><p>Upload a template, choose and position its labels, preview, then activate it.</p></div><Link className="button button-outline" to="/admin/certificates">TEST CERTIFICATE →</Link></div>
@@ -115,9 +165,13 @@ export function AdminCertificateTemplatesPage() {
       {template && <><p className="certificate-help">Drag each sample label on the certificate. Its position is stored as a percentage of the original page, so preview size does not affect the PDF.</p>
         <div className="certificate-stage" ref={stageRef} style={{ aspectRatio: `${dimensions.width} / ${dimensions.height}` }}>
           {template.file_type === 'pdf' ? <canvas ref={canvasRef} /> : <img src={sourceUrl} alt="Certificate template" />}
-          {(['name', 'college', 'team'] as const).filter(field => field === 'name' || template[`include_${field}`]).map(field => <span key={field} className="certificate-drag-text" onPointerDown={event => drag(event, field)} onPointerMove={event => { if (event.buttons) drag(event, field) }} onPointerUp={event => finishDrag(event, field)} style={{ left: `${template[`${field}_x`]}%`, top: `${template[`${field}_y`]}%`, fontSize: `${template[`${field}_font_size`] * scale}px`, color: template[`${field}_color`], transform: `translate(${template[`${field}_alignment`] === 'center' ? '-50%' : template[`${field}_alignment`] === 'right' ? '-100%' : '0'}, -100%)`, fontWeight: field === 'name' ? 700 : 400 }}>{fieldLabels[field].sample}</span>)}
+          {(['name', 'college', 'team'] as const).filter(field => field === 'name' || template[`include_${field}`]).map(field => <span key={field} className="certificate-drag-text" onPointerDown={event => drag(event, field)} onPointerMove={event => { if (event.buttons) drag(event, field) }} onPointerUp={event => finishDrag(event, field)} style={{ left: `${template[`${field}_x`]}%`, top: `${template[`${field}_y`]}%`, fontSize: `${template[`${field}_font_size`] * scale}px`, color: template[`${field}_color`], transform: `translate(${template[`${field}_alignment`] === 'center' ? '-50%' : template[`${field}_alignment`] === 'right' ? '-100%' : '0'}, ${-baselines[field]}px)`, fontFamily: previewFamily(field), fontWeight: template[`${field}_bold`] ? 700 : 400, fontStyle: template[`${field}_italic`] ? 'italic' : 'normal' }}>{fieldLabels[field].sample}<span className="baseline-marker" ref={element => { baselineMarkers.current[field] = element }} /></span>)}
         </div>
-        <div className="certificate-control-grid">{(['name', 'college', 'team'] as const).map(field => <fieldset key={field}><legend>{fieldLabels[field].legend}</legend>{field !== 'name' && <label className="include-check"><input type="checkbox" checked={template[`include_${field}`]} onChange={event => edit({ [`include_${field}`]: event.target.checked })} /> {field === 'college' ? 'Include College Name' : 'Include Team Name'}</label>}<label>Font size<input type="number" min="8" max="200" value={template[`${field}_font_size`]} onChange={event => edit({ [`${field}_font_size`]: Number(event.target.value) })} /></label><label>Alignment<select value={template[`${field}_alignment`]} onChange={event => edit({ [`${field}_alignment`]: event.target.value })}><option value="left">Left</option><option value="center">Center</option><option value="right">Right</option></select></label><label>Color<input type="color" value={template[`${field}_color`]} onChange={event => edit({ [`${field}_color`]: event.target.value })} /></label></fieldset>)}</div>
+        <div className="certificate-control-grid">{(['name', 'college', 'team'] as const).map(field => <fieldset key={field}><legend>{fieldLabels[field].legend}</legend>{field !== 'name' && <label className="include-check"><input type="checkbox" checked={template[`include_${field}`]} onChange={event => edit({ [`include_${field}`]: event.target.checked })} /> {field === 'college' ? 'Include College Name' : 'Include Team Name'}</label>}<label>Font family<select value={template[`${field}_font_family`]} onChange={event => changeFamily(field, event.target.value)}>{fonts.length === 0 && <option value={template[`${field}_font_family`]}>{template[`${field}_font_family`]}</option>}{[...new Set(fonts.map(font => font.category))].map(category => <optgroup key={category} label={category}>{fonts.filter(font => font.category === category).map(font => <option key={font.key} value={font.key}>{font.label}</option>)}</optgroup>)}</select></label>{(() => {
+          const styles = fontFor(field)?.styles ?? []
+          const bold = template[`${field}_bold`], italic = template[`${field}_italic`]
+          return <div className="style-checks"><label className="include-check"><input type="checkbox" checked={bold} disabled={!styles.includes(styleName(!bold, italic))} onChange={event => edit({ [`${field}_bold`]: event.target.checked })} /> Bold</label><label className="include-check"><input type="checkbox" checked={italic} disabled={!styles.includes(styleName(bold, !italic))} onChange={event => edit({ [`${field}_italic`]: event.target.checked })} /> Italic</label>{styles.length === 1 && <small>Regular style only</small>}{styles.length > 1 && styles.length < 4 && <small>No italic style</small>}</div>
+        })()}<label>Font size<input type="number" min="8" max="200" value={template[`${field}_font_size`]} onChange={event => edit({ [`${field}_font_size`]: Number(event.target.value) })} /></label><label>Alignment<select value={template[`${field}_alignment`]} onChange={event => edit({ [`${field}_alignment`]: event.target.value })}><option value="left">Left</option><option value="center">Center</option><option value="right">Right</option></select></label><label>Color<input type="color" value={template[`${field}_color`]} onChange={event => edit({ [`${field}_color`]: event.target.value })} /></label></fieldset>)}</div>
         <div className="certificate-actions"><button disabled={busy} onClick={() => void act(() => api.updateTemplate(template.id, template), 'Placement saved.')} type="button">SAVE PLACEMENT</button><button type="button" onClick={() => void certificatePdf(`/api/certificates/templates/${template.id}/preview`).catch(err => setError(err.message))}>PREVIEW FINAL PDF</button>{!template.is_active && uploadedId !== template.id ? <button type="button" onClick={() => void act(() => api.activateTemplate(template.id), 'Template is now active.')}>SET AS ACTIVE</button> : template.is_active ? <strong>ACTIVE TEMPLATE</strong> : null}</div>
       </>}
     </section>}

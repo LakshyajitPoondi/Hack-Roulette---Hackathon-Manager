@@ -3,6 +3,9 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+FontFamily = Literal["helvetica", "montserrat", "times", "liberation-serif", "playfair-display",
+                     "eb-garamond", "cinzel", "great-vibes", "pinyon-script"]
+
 
 class TemplateUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=160)
@@ -23,6 +26,15 @@ class TemplateUpdate(BaseModel):
     team_color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
     include_college: bool | None = None
     include_team: bool | None = None
+    name_font_family: FontFamily | None = None
+    name_bold: bool | None = None
+    name_italic: bool | None = None
+    college_font_family: FontFamily | None = None
+    college_bold: bool | None = None
+    college_italic: bool | None = None
+    team_font_family: FontFamily | None = None
+    team_bold: bool | None = None
+    team_italic: bool | None = None
 
 
 class TemplateRead(BaseModel):
@@ -48,6 +60,15 @@ class TemplateRead(BaseModel):
     team_color: str
     include_college: bool
     include_team: bool
+    name_font_family: str
+    name_bold: bool
+    name_italic: bool
+    college_font_family: str
+    college_bold: bool
+    college_italic: bool
+    team_font_family: str
+    team_bold: bool
+    team_italic: bool
     created_by: int
     created_at: datetime
     updated_at: datetime

@@ -2,7 +2,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session, defer
 
@@ -11,6 +11,7 @@ from app.db.session import get_db
 from app.models.certificate import CertificateTemplate
 from app.models.user import Role, User
 from app.schemas.certificate import CertificateRead, TemplateRead, TemplateUpdate
+from app.services import certificate_fonts as fonts
 from app.services import certificates as service
 from app.services.db_participants import get_person
 from app.models.participant import Participant
@@ -18,6 +19,20 @@ from app.models.participant import Participant
 router = APIRouter(prefix="/api/certificates", tags=["certificates"])
 Admin = Annotated[User, Depends(require_role(Role.SUPER_ADMIN, Role.ADMIN))]
 Database = Annotated[Session, Depends(get_db)]
+
+
+@router.get("/fonts")
+def font_catalog(_: Admin):
+    return fonts.catalog()
+
+
+# Public so the browser's font loader can fetch it without cookies; the files are open-licensed.
+@router.get("/fonts/{family}/{style}")
+def font_file(family: str, style: str):
+    path = fonts.font_file(family, style)
+    if path is None:
+        raise HTTPException(404, "Font not found")
+    return FileResponse(path, media_type="font/ttf", headers={"Cache-Control": "public, max-age=604800"})
 
 
 @router.get("/templates", response_model=list[TemplateRead])
@@ -45,6 +60,11 @@ def update_template(template_id: int, payload: TemplateUpdate, db: Database, _: 
         if key == "name" and not value.strip():
             raise HTTPException(422, "Template name is required")
         setattr(template, key, value.strip() if key == "name" else value)
+    for field, label in (("name", "Participant name"), ("college", "College name"), ("team", "Team name")):
+        family, bold, italic = (getattr(template, f"{field}_{key}") for key in ("font_family", "bold", "italic"))
+        if not fonts.supports(family, bold, italic):
+            db.rollback()
+            raise HTTPException(422, f"{label}: {fonts.FAMILIES[family].label} has no {fonts.style_name(bold, italic).replace('_', ' ')} style")
     db.commit(); db.refresh(template)
     return template
 
