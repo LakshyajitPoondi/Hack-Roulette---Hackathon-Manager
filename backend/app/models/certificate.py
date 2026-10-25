@@ -39,6 +39,10 @@ class CertificateTemplate(Base):
     team_font_family: Mapped[str] = mapped_column(String(40), nullable=False, default="helvetica")
     team_bold: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     team_italic: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Uppercasing happens at render time; stored participant data is never changed.
+    name_uppercase: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    college_uppercase: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    team_uppercase: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     include_college: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     include_team: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)

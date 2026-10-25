@@ -99,7 +99,7 @@ def delete_template(template_id: int, db: Database, _: Admin):
 
 @router.get("/templates/{template_id}/preview")
 def preview_template(template_id: int, db: Database, _: Admin):
-    pdf = service.render_pdf(service.get_template(db, template_id), "ALEX JOHNSON", "EXAMPLE COLLEGE", "TEAM NOVA")
+    pdf = service.render_pdf(service.get_template(db, template_id), "Alex Johnson", "Example College", "Team Nova")
     return Response(pdf, media_type="application/pdf", headers={"Content-Disposition": 'inline; filename="certificate-preview.pdf"'})
 
 

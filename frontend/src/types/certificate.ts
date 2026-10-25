@@ -29,6 +29,9 @@ export interface CertificateTemplate {
   team_font_family: string
   team_bold: boolean
   team_italic: boolean
+  name_uppercase: boolean
+  college_uppercase: boolean
+  team_uppercase: boolean
   created_by: number
   created_at: string
   updated_at: string

@@ -19,6 +19,7 @@ FIELDS = {
     "team_name": {"team", "team name"},
     "college": {"college", "college name", "institution"},
 }
+REQUIRED = ("name", "email")
 
 
 def _header(value: str) -> str:
@@ -42,9 +43,11 @@ def preview(db: Session, data: bytes) -> dict:
         columns = {}
         for field, aliases in FIELDS.items():
             matches = [i for i, value in enumerate(headers) if _header(value) in aliases]
-            if len(matches) != 1:
-                raise HTTPException(422, f"CSV needs exactly one {field.replace('_', ' ')} column")
-            columns[field] = matches[0]
+            if len(matches) > 1 or (field in REQUIRED and not matches):
+                raise HTTPException(422, f"CSV needs exactly one {field.replace('_', ' ')} column"
+                                    if field in REQUIRED else f"CSV has more than one {field.replace('_', ' ')} column")
+            if matches:
+                columns[field] = matches[0]
         existing = set(db.scalars(select(Participant.email)))
         seen = set()
         rows = []
@@ -53,13 +56,16 @@ def preview(db: Session, data: bytes) -> dict:
                 continue
             if len(rows) >= MAX_ROWS:
                 raise HTTPException(422, "CSV may contain at most 5000 participant rows")
-            values = {field: _text(raw[index]) if index < len(raw) else "" for field, index in columns.items()}
+            # Team name and college are optional: a missing column or blank cell becomes "".
+            values = {field: _text(raw[columns[field]]) if field in columns and columns[field] < len(raw) else ""
+                      for field in FIELDS}
             reasons = []
             if len(raw) != len(headers):
                 reasons.append("Wrong number of columns")
-            for field in ("name", "email", "team_name", "college"):
+            for field in FIELDS:
                 if not values[field]:
-                    reasons.append(f"Missing {field.replace('_', ' ')}")
+                    if field in REQUIRED:
+                        reasons.append(f"Missing {field.replace('_', ' ')}")
                 elif len(values[field]) > (320 if field == "email" else 160):
                     reasons.append(f"{field.replace('_', ' ').capitalize()} is too long")
             if values["email"] and len(values["email"]) <= 320:
@@ -91,7 +97,7 @@ def import_rows(db: Session, data: bytes, expected_digest: str) -> dict:
     result = preview(db, data)
     valid = [row for row in result["rows"] if row["status"] == "VALID"]
     if valid:
-        values = [{key: row[key] for key in ("name", "email", "team_name", "college")} for row in valid]
+        values = [{key: row[key] or None for key in FIELDS} for row in valid]
         if db.bind.dialect.name == "postgresql":
             from sqlalchemy.dialects.postgresql import insert
         else:

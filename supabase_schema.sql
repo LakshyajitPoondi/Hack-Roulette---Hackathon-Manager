@@ -81,6 +81,9 @@ CREATE TABLE IF NOT EXISTS public.certificate_templates (
     team_font_family    VARCHAR(40) NOT NULL DEFAULT 'helvetica',
     team_bold           BOOLEAN NOT NULL DEFAULT FALSE,
     team_italic         BOOLEAN NOT NULL DEFAULT FALSE,
+    name_uppercase      BOOLEAN NOT NULL DEFAULT FALSE,
+    college_uppercase   BOOLEAN NOT NULL DEFAULT FALSE,
+    team_uppercase      BOOLEAN NOT NULL DEFAULT FALSE,
     created_by          INTEGER NOT NULL REFERENCES public.users (id),
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -107,6 +110,12 @@ ALTER TABLE public.certificate_templates
     ADD COLUMN IF NOT EXISTS team_font_family VARCHAR(40) NOT NULL DEFAULT 'helvetica',
     ADD COLUMN IF NOT EXISTS team_bold BOOLEAN NOT NULL DEFAULT FALSE,
     ADD COLUMN IF NOT EXISTS team_italic BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- Optional uppercase per field, applied only when rendering. Off keeps the original text.
+ALTER TABLE public.certificate_templates
+    ADD COLUMN IF NOT EXISTS name_uppercase BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS college_uppercase BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS team_uppercase BOOLEAN NOT NULL DEFAULT FALSE;
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_certificate_template_active
     ON public.certificate_templates (is_active)

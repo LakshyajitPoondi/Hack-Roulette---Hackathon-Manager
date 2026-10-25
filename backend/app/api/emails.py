@@ -12,7 +12,7 @@ from app.db.session import get_db
 from app.models.email import EmailCampaign, EmailDelivery, EmailTemplate
 from app.models.user import Role, User
 from app.services.campaign_processor import MAX_ATTEMPTS, SEND_BATCH_SIZE, process_campaign
-from app.services.certificates import active_template, render_pdf
+from app.services.certificates import active_template, placeholder_values, render_pdf
 from app.services.db_participants import get_person
 from app.services.email_campaigns import campaign_data, classify, recipients, utcnow
 from app.services.email_delivery import render, provider
@@ -30,6 +30,7 @@ class TemplateInput(BaseModel):
 
 class PreviewInput(TemplateInput):
     participant_id: int | None = None
+    attach_certificate: bool = False
 
 
 class Selection(BaseModel):
@@ -93,16 +94,18 @@ def manual_send(payload: ManualEmail, db: Database, _: Admin):
     if not settings.email_from:
         raise HTTPException(503, "Sender email not configured. Set EMAIL_FROM.")
     to = valid_email(payload.to)
-    values = {"participant_name": payload.participant_name.strip(), "college_name": payload.college_name.strip()}
+    name, college = payload.participant_name.strip(), payload.college_name.strip()
+    template = active_template(db) if payload.attach_certificate else None
+    values = placeholder_values(template, name, college)
     try:
         subject = render(payload.subject, values)
         body = render(payload.body, values)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from None
     attachment = None
-    if payload.attach_certificate:
+    if template is not None:
         try:
-            attachment = render_pdf(active_template(db), values["participant_name"], values["college_name"])
+            attachment = render_pdf(template, name, college)
         except HTTPException:
             raise
         except Exception:
@@ -177,7 +180,13 @@ def delete_template(template_id: int, db: Database, _: Admin):
 def preview_email(payload: PreviewInput, db: Database, _: Admin):
     if payload.participant_id is not None:
         person = get_person(db, payload.participant_id)
-        values = {"participant_name": person.name, "college_name": person.college or ""}
+        template = None
+        if payload.attach_certificate:
+            try:
+                template = active_template(db)
+            except HTTPException:
+                template = None  # No active template yet: preview the values unchanged.
+        values = placeholder_values(template, person.name, person.college)
         try:
             return {"subject": render(payload.subject, values), "body": render(payload.body, values)}
         except ValueError as exc:
@@ -194,10 +203,11 @@ def test_email(payload: TestInput, db: Database, _: Admin):
     if payload.participant_id:
         from app.services.email_delivery import filename
         person = get_person(db, payload.participant_id)
-        if payload.attach_certificate:
-            attachment = render_pdf(active_template(db), person.name, person.college, person.team_name)
+        template = active_template(db) if payload.attach_certificate else None
+        if template is not None:
+            attachment = render_pdf(template, person.name, person.college, person.team_name)
             attachment_name = filename(person.name)
-        values = {"participant_name": person.name, "college_name": person.college or ""}
+        values = placeholder_values(template, person.name, person.college)
         rendered = {"subject": render(payload.subject, values), "body": render(payload.body, values)}
     try:
         message_id = provider().send(to=to, sender_name=payload.sender_name, reply_to=reply,

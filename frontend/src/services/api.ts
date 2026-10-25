@@ -85,7 +85,7 @@ export const api = {
   createEmailTemplate: (data: Pick<EmailTemplate, 'name' | 'subject' | 'body'>) => request<EmailTemplate>('/api/email/templates', { method: 'POST', body: JSON.stringify(data) }),
   updateEmailTemplate: (id: number, data: Pick<EmailTemplate, 'name' | 'subject' | 'body'>) => request<EmailTemplate>(`/api/email/templates/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteEmailTemplate: (id: number) => request<void>(`/api/email/templates/${id}`, { method: 'DELETE' }),
-  emailPreview: (subject: string, body: string, participant_id?: number) => request<{ subject: string; body: string }>('/api/email/preview', { method: 'POST', body: JSON.stringify({ name: 'Preview', subject, body, participant_id }) }),
+  emailPreview: (subject: string, body: string, participant_id?: number, attach_certificate = false) => request<{ subject: string; body: string }>('/api/email/preview', { method: 'POST', body: JSON.stringify({ name: 'Preview', subject, body, participant_id, attach_certificate }) }),
   emailTest: (data: { to: string; sender_name: string; reply_to: string | null; subject: string; body: string; participant_id?: number; attach_certificate?: boolean }) => request<{ recipient: string; message_id: string; mode: string }>('/api/email/test', { method: 'POST', body: JSON.stringify(data) }),
   recipientSummary: (data: RecipientSelection) => request<RecipientSummary>('/api/email/recipients/summary', { method: 'POST', body: JSON.stringify(data) }),
   createCampaign: (data: CampaignInput) => request<{ id: number; status: string; recipients: number; skipped_invalid: number }>('/api/email/campaigns', { method: 'POST', body: JSON.stringify(data) }),

@@ -35,6 +35,9 @@ class TemplateUpdate(BaseModel):
     team_font_family: FontFamily | None = None
     team_bold: bool | None = None
     team_italic: bool | None = None
+    name_uppercase: bool | None = None
+    college_uppercase: bool | None = None
+    team_uppercase: bool | None = None
 
 
 class TemplateRead(BaseModel):
@@ -69,6 +72,9 @@ class TemplateRead(BaseModel):
     team_font_family: str
     team_bold: bool
     team_italic: bool
+    name_uppercase: bool
+    college_uppercase: bool
+    team_uppercase: bool
     created_by: int
     created_at: datetime
     updated_at: datetime

@@ -44,6 +44,16 @@ def get_template(db: Session, template_id: int) -> CertificateTemplate:
     return template
 
 
+def cased(template: CertificateTemplate | None, field: str, text: str) -> str:
+    """Apply the template's uppercase setting for one field (name, college or team)."""
+    return text.upper() if template is not None and getattr(template, f"{field}_uppercase") else text
+
+
+def placeholder_values(template: CertificateTemplate | None, name: str, college: str | None) -> dict[str, str]:
+    """Email placeholder values for a certificate email, cased like the certificate. Pass None for plain emails."""
+    return {"participant_name": cased(template, "name", name), "college_name": cased(template, "college", college or "")}
+
+
 def render_pdf(template: CertificateTemplate, name: str, college: str | None, team: str | None = None, *,
                include_college: bool | None = None, include_team: bool | None = None) -> bytes:
     """Overlay the participant's details. Include flags default to the template's saved settings."""
@@ -65,7 +75,7 @@ def render_pdf(template: CertificateTemplate, name: str, college: str | None, te
     def line(text: str, field: str):
         value = lambda key: getattr(template, f"{field}_{key}")
         font = pdf_font(value("font_family"), value("bold"), value("italic"))
-        return text, value("x"), value("y"), value("font_size"), value("alignment"), value("color"), font
+        return cased(template, field, text), value("x"), value("y"), value("font_size"), value("alignment"), value("color"), font
 
     lines = [line(name, "name")]
     # A missing value is skipped entirely, even when its line is included.

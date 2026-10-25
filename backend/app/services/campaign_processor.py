@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.models.certificate import CertificateTemplate
 from app.models.email import EmailCampaign, EmailDelivery
 from app.models.participant import Participant
-from app.services.certificates import render_pdf
+from app.services.certificates import placeholder_values, render_pdf
 from app.services.email_campaigns import refresh_status, sent_keys, utcnow
 from app.services.email_delivery import filename, provider, render
 
@@ -56,7 +56,7 @@ def process_campaign(db: Session, campaign_id: int, limit: int) -> int:
                 delivery.participant_name = person.name
                 delivery.college = person.college
                 delivery.email = person.email
-            pdf = None
+            pdf = template = None
             if campaign.attach_certificate:
                 template = db.get(CertificateTemplate, campaign.certificate_template_id)
                 if not template:
@@ -64,7 +64,7 @@ def process_campaign(db: Session, campaign_id: int, limit: int) -> int:
                 pdf = render_pdf(template, delivery.participant_name, delivery.college, team,
                                  include_college=campaign.certificate_include_college,
                                  include_team=campaign.certificate_include_team)
-            values = {"participant_name": delivery.participant_name, "college_name": delivery.college or ""}
+            values = placeholder_values(template, delivery.participant_name, delivery.college)
             message_id = provider().send(
                 to=delivery.email, recipient_name=delivery.participant_name,
                 sender_name=campaign.sender_name, reply_to=campaign.reply_to,

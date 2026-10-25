@@ -167,6 +167,61 @@ def test_every_supported_style_renders_with_its_own_font_file(client, make_user,
             assert fonts == {expected_font(family, style): not entry.builtin}, (family, style)
 
 
+def test_uppercase_settings_apply_only_when_rendering(client, make_user, login, monkeypatch):
+    from app.api import emails
+    from app.services import campaign_processor
+    admin = make_user(Role.ADMIN, "uppercase@example.com"); login(admin.email)
+    template_id = upload_active_template(client)
+    saved = next(item for item in client.get("/api/certificates/templates").json() if item["id"] == template_id)
+    assert (saved["name_uppercase"], saved["college_uppercase"], saved["team_uppercase"]) == (False, False, False)
+    person = client.post("/api/participants", json={"name": "Lakshyajit Poondi", "email": "Lakshya@Example.com",
+                                                    "team_name": "Team Alpha", "college": "Easwari Engineering College"}).json()
+    assert client.patch(f"/api/certificates/templates/{template_id}", json={"include_team": True}).status_code == 200
+    originals = {"name": "Lakshyajit Poondi", "college": "Easwari Engineering College", "team": "Team Alpha"}
+
+    def text(response):
+        return PdfReader(io.BytesIO(response.content)).pages[0].extract_text()
+
+    assert all(value in text(client.get(f"/api/certificates/participants/{person['id']}/download")) for value in originals.values())
+    for field in originals:
+        assert client.patch(f"/api/certificates/templates/{template_id}",
+                            json={f"{other}_uppercase": other == field for other in originals}).status_code == 200
+        content = text(client.get(f"/api/certificates/participants/{person['id']}/download"))
+        for other, value in originals.items():
+            assert (value.upper() if other == field else value) in content, (field, other)
+            assert (value not in content) == (other == field), (field, other)
+    assert client.patch(f"/api/certificates/templates/{template_id}",
+                        json={"name_uppercase": True, "college_uppercase": True, "team_uppercase": True}).status_code == 200
+    # Stored participant data is unchanged.
+    stored = client.get(f"/api/participants/{person['id']}").json()
+    assert (stored["name"], stored["college"], stored["team_name"]) == ("Lakshyajit Poondi", "Easwari Engineering College", "Team Alpha")
+    assert "ALEX JOHNSON" in text(client.get(f"/api/certificates/templates/{template_id}/preview"))
+    manual = text(client.post("/api/certificates/manual", json={"participant_name": "Solo Person", "college_name": "Some College"}))
+    assert "SOLO PERSON" in manual and "SOME COLLEGE" in manual
+
+    # Email placeholders follow the certificate's casing only for certificate emails; other text is untouched.
+    email = {"name": "P", "subject": "Hi {{participant_name}}", "body": "From [college]. Reply to Lakshya@Example.com",
+             "participant_id": person["id"]}
+    assert client.post("/api/email/preview", json={**email, "attach_certificate": True}).json() == {
+        "subject": "Hi LAKSHYAJIT POONDI", "body": "From EASWARI ENGINEERING COLLEGE. Reply to Lakshya@Example.com"}
+    assert client.post("/api/email/preview", json=email).json() == {
+        "subject": "Hi Lakshyajit Poondi", "body": "From Easwari Engineering College. Reply to Lakshya@Example.com"}
+    sent = []
+    class Provider:
+        def send(self, **kwargs):
+            sent.append(kwargs)
+            return "provider-123"
+    monkeypatch.setattr(emails, "provider", lambda: Provider())
+    monkeypatch.setattr(campaign_processor, "provider", lambda: Provider())
+    assert client.post("/api/email/test", json={"to": "tester@example.com", "sender_name": "Tech Roulette", "subject": email["subject"],
+                                                "body": email["body"], "participant_id": person["id"], "attach_certificate": True}).status_code == 200
+    assert client.post("/api/email/campaigns", json={"name": "Upper", "sender_name": "Tech Roulette", "subject": email["subject"],
+        "body": email["body"], "selection": "selected", "participant_ids": [person["id"]], "confirmed": True}).status_code == 201
+    for message in sent:
+        assert message["subject"] == "Hi LAKSHYAJIT POONDI" and "LAKSHYAJIT POONDI" in PdfReader(io.BytesIO(message["attachment"])).pages[0].extract_text()
+    assert sent[1]["to"] == "lakshya@example.com"
+
+
 def test_unsupported_font_styles_are_rejected(client, make_user, login):
     admin = make_user(Role.ADMIN, "bad-fonts@example.com"); login(admin.email)
     template_id = upload_active_template(client)

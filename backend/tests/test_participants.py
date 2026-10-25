@@ -87,14 +87,15 @@ def test_csv_import_preview_validation_and_rbac(client, make_user, login, fake_s
     response = client.post("/api/participants/import/preview", files={"file": ("people.csv", data)})
     assert response.status_code == 200, response.text
     preview = response.json()
-    assert (preview["valid"], preview["duplicates"], preview["invalid"]) == (1, 2, 3)
+    # "Missing team" is valid now: team name is optional.
+    assert (preview["valid"], preview["duplicates"], preview["invalid"]) == (2, 2, 2)
     assert preview["rows"][0]["team_name"] == "Nova, Team"
     assert client.get("/api/participants").json()["total"] == 1
     changed = client.post("/api/participants/import", data={"digest": preview["digest"]}, files={"file": ("people.csv", b"name,email,team_name,college\n")})
     assert changed.status_code == 409
     imported = client.post("/api/participants/import", data={"digest": preview["digest"]}, files={"file": ("people.csv", data)})
-    assert imported.json() == {"imported": 1, "duplicates": 2, "invalid": 3}
-    assert client.get("/api/participants").json()["total"] == 2
+    assert imported.json() == {"imported": 2, "duplicates": 2, "invalid": 2}
+    assert client.get("/api/participants").json()["total"] == 3
     assert client.get("/api/participants", params={"search": "meera"}).json()["items"][0]["email"] == "meera@example.com"
     repeated = client.post("/api/participants/import", data={"digest": preview["digest"]}, files={"file": ("people.csv", data)})
     assert repeated.json()["imported"] == 0
@@ -167,7 +168,35 @@ def test_admin_can_add_participant_manually(client, make_user, login):
         assert client.post("/api/participants", json=invalid).status_code == 422
     edited = client.patch(f"/api/participants/{created.json()['id']}", json={**person, "team_name": "Orbit"})
     assert edited.status_code == 200 and edited.json()["team_name"] == "Orbit"
-    # CSV import keeps requiring team and college.
-    csv_data = b"name,email,team_name,college\nNo Team,noteam@example.com,,ABC College\n"
-    preview = client.post("/api/participants/import/preview", files={"file": ("people.csv", csv_data)}).json()
-    assert preview["rows"][0]["status"] == "INVALID" and "Missing team name" in preview["rows"][0]["reason"]
+
+
+def test_csv_team_and_college_are_optional(client, make_user, login):
+    make_user(Role.ADMIN, "optional-csv@example.com"); login("optional-csv@example.com")
+
+    def preview(data: bytes):
+        return client.post("/api/participants/import/preview", files={"file": ("people.csv", data)})
+
+    for data in (b"name,email\nJohn Doe,john@example.com\nJane Smith,jane@example.com\n",
+                 b"name,email,college\nCollege Only,college@example.com,Easwari Engineering College\n",
+                 b"name,email,team_name\nTeam Only,team@example.com,Team Alpha\n",
+                 b"name,email,team_name,college\nAll Fields,all@example.com,Team Alpha,Easwari Engineering College\n"
+                 b"Blank Cells,blank@example.com, ,\n"):
+        checked = preview(data)
+        assert checked.status_code == 200, checked.text
+        assert checked.json()["invalid"] == 0
+        imported = client.post("/api/participants/import", data={"digest": checked.json()["digest"]}, files={"file": ("people.csv", data)})
+        assert imported.json()["imported"] == checked.json()["valid"]
+    stored = {person["email"]: (person["team_name"], person["college"]) for person in client.get("/api/participants/all").json()}
+    assert stored == {"john@example.com": (None, None), "jane@example.com": (None, None),
+                      "college@example.com": (None, "Easwari Engineering College"), "team@example.com": ("Team Alpha", None),
+                      "all@example.com": ("Team Alpha", "Easwari Engineering College"), "blank@example.com": (None, None)}
+
+    assert preview(b"email,college\nx@example.com,C\n").json()["detail"] == "CSV needs exactly one name column"
+    assert preview(b"name,team_name\nX,Team\n").json()["detail"] == "CSV needs exactly one email column"
+    ambiguous = preview(b"name,email,team,team name\nX,x@example.com,A,B\n")
+    assert ambiguous.status_code == 422 and ambiguous.json()["detail"] == "CSV has more than one team name column"
+    rows = preview(b"name,email,college\n,missing@example.com,C\nNo Email,,C\nBad,not-an-email,\n"
+                   b"Dup,JOHN@example.com,\nLong,long@example.com," + b"x" * 161 + b"\n").json()["rows"]
+    assert [(row["status"], row["reason"]) for row in rows] == [
+        ("INVALID", "Missing name"), ("INVALID", "Missing email"), ("INVALID", "Invalid email"),
+        ("DUPLICATE", "Duplicate email"), ("INVALID", "College is too long")]

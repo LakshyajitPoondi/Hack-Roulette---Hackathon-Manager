@@ -43,7 +43,7 @@ export function EmailComposePage() {
     if (!chosen.length) return
     setBusy(true); setError('')
     try {
-      const rendered = await api.emailPreview(subject, body, chosen[0].id)
+      const rendered = await api.emailPreview(subject, body, chosen[0].id, attach)
       setEmailPreview({ ...rendered, participant: [chosen[0].name, chosen[0].college].filter(Boolean).join(' · ') })
     } catch (err) { setError(err instanceof Error ? err.message : 'Could not preview email.') }
     finally { setBusy(false) }
