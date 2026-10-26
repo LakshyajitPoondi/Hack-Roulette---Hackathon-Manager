@@ -15,6 +15,8 @@ export function AdminParticipantsPage() {
   const { user } = useAuth()
   const canManage = user?.role !== 'STAFF'
   const [page, setPage] = useState(1)
+  // searchInput updates on every keystroke; search follows after a pause and drives the request.
+  const [searchInput, setSearchInput] = useState('')
   const [search, setSearch] = useState('')
   const [sort, setSort] = useState('name:asc')
   const [data, setData] = useState<CsvParticipantPage | null>(null)
@@ -33,6 +35,12 @@ export function AdminParticipantsPage() {
   const [saving, setSaving] = useState(false)
   const [reviewing, setReviewing] = useState(false)
   const [sharedWarning, setSharedWarning] = useState('')
+
+  useEffect(() => {
+    if (searchInput === search) return
+    const timer = setTimeout(() => { setSearch(searchInput); setPage(1) }, 250)
+    return () => clearTimeout(timer)
+  }, [searchInput, search])
 
   useEffect(() => {
     let active = true
@@ -93,7 +101,7 @@ export function AdminParticipantsPage() {
     try {
       if (editing.id === undefined) {
         const created = await api.createCsvParticipant(person)
-        setEditing(null); setMessage(`${created.name} added.`); setSearch(created.email); setPage(1); setReload(value => value + 1)
+        setEditing(null); setMessage(`${created.name} added.`); setSearchInput(created.email); setSearch(created.email); setPage(1); setReload(value => value + 1)
       } else {
         const updated = await api.updateCsvParticipant(editing.id, person)
         setData(previous => previous ? { ...previous, items: previous.items.map(item => item.id === updated.id ? updated : item) } : previous)
@@ -129,11 +137,11 @@ export function AdminParticipantsPage() {
       <div className="certificate-actions"><button type="button" disabled={busy} onClick={() => setReviewing(false)}>CLOSE</button><button type="button" disabled={busy || !preview.review} onClick={() => void importCsv(true)}>{busy ? 'IMPORTING…' : `IMPORT ELIGIBLE DUPLICATES (${preview.valid} NEW + ${preview.review} REVIEWED)`}</button></div><p>Closing imports nothing.</p></section></div>}
     <section className="participant-panel csv-list">
       <div className="participant-panel-heading"><span>IMPORTED PARTICIPANTS</span><span className="panel-heading-actions"><span>{loading ? 'LOADING…' : listError ? 'UNAVAILABLE' : `${data?.total ?? 0} RESULTS`}</span>{canManage && <button type="button" className="add-participant" disabled={legacyServer} onClick={() => { setEditing({ name: '', email: '', team_name: '', college: '' }); setEditError(''); setFieldErrors({}); setSharedWarning('') }}>+ ADD PARTICIPANT</button>}</span></div>
-      {loading ? <div className="participant-empty">Loading participants…</div>
-        : listError ? <div className="participant-empty" role="alert"><strong>COULD NOT LOAD CSV PARTICIPANTS</strong><p>{listError}</p><button className="button button-outline" type="button" onClick={() => setReload(value => value + 1)}>TRY AGAIN →</button></div>
-        : data?.total === 0 && !search ? <div className="participant-empty"><strong>NO PARTICIPANTS IMPORTED</strong><p>Choose a CSV above to start. The required columns are name and email; team name and college are optional.</p></div>
+      {listError ? <div className="participant-empty" role="alert"><strong>COULD NOT LOAD CSV PARTICIPANTS</strong><p>{listError}</p><button className="button button-outline" type="button" onClick={() => setReload(value => value + 1)}>TRY AGAIN →</button></div>
+        : !data ? <div className="participant-empty">Loading participants…</div>
+        : !loading && data.total === 0 && !search ? <div className="participant-empty"><strong>NO PARTICIPANTS IMPORTED</strong><p>Choose a CSV above to start. The required columns are name and email; team name and college are optional.</p></div>
         : <>
-          <div className="csv-toolbar"><input type="search" aria-label="Search participants" placeholder="Search name, email, team, college…" value={search} onChange={event => { setSearch(event.target.value); setPage(1) }} /><select aria-label="Sort participants" value={sort} onChange={event => { setSort(event.target.value); setPage(1) }}><option value="name:asc">Name A–Z</option><option value="name:desc">Name Z–A</option><option value="created_at:desc">Newest first</option><option value="college:asc">College A–Z</option><option value="team_name:asc">Team A–Z</option></select><span>{selected.size} selected</span><button type="button" onClick={() => setSelected(previous => new Set([...previous, ...pageIds]))}>SELECT ALL ON PAGE</button><button type="button" onClick={() => setSelected(new Set())}>DESELECT ALL</button></div>
+          <div className="csv-toolbar"><input type="search" aria-label="Search participants" placeholder="Search name, email, team, college…" value={searchInput} onChange={event => setSearchInput(event.target.value)} /><select aria-label="Sort participants" value={sort} onChange={event => { setSort(event.target.value); setPage(1) }}><option value="name:asc">Name A–Z</option><option value="name:desc">Name Z–A</option><option value="created_at:desc">Newest first</option><option value="college:asc">College A–Z</option><option value="team_name:asc">Team A–Z</option></select><span>{selected.size} selected</span><button type="button" onClick={() => setSelected(previous => new Set([...previous, ...pageIds]))}>SELECT ALL ON PAGE</button><button type="button" onClick={() => setSelected(new Set())}>DESELECT ALL</button></div>
           <div className="participant-table-wrap"><table className="participants-table csv-table"><thead><tr><th><input type="checkbox" aria-label="Select all on page" checked={pageIds.length > 0 && pageIds.every(id => selected.has(id))} onChange={() => setSelected(previous => { const next = new Set(previous); if (pageIds.every(id => next.has(id))) pageIds.forEach(id => next.delete(id)); else pageIds.forEach(id => next.add(id)); return next })} /></th><th>NAME</th><th>EMAIL</th><th>TEAM NAME</th><th>COLLEGE</th>{canManage && <th>ACTION</th>}</tr></thead><tbody>{data?.items.map(person => <tr key={person.id}><td><input type="checkbox" aria-label={`Select ${person.name}`} checked={selected.has(person.id)} onChange={() => toggle(person.id)} /></td><td>{person.name}</td><td>{person.email}</td><td>{person.team_name || '—'}</td><td>{person.college || '—'}</td>{canManage && <td><button type="button" className="text-action" onClick={() => { setEditing({ ...person }); setEditError(''); setFieldErrors({}); setSharedWarning('') }}>EDIT</button> <button type="button" className="text-action" onClick={() => void remove(person.id, person.name)}>DELETE</button></td>}</tr>)}</tbody></table></div>
           {data?.items.length === 0 && <div className="participant-empty">No matching participants.</div>}
         </>}

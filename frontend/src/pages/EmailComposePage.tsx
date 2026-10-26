@@ -4,6 +4,8 @@ import { ApiError, api } from '../services/api'
 import type { CsvParticipant } from '../types/participant'
 import type { Campaign, EmailTemplate, RecipientSummary } from '../types/email'
 
+const SENDER_NAME = 'Department of Artificial Intelligence & Data Science'
+
 export function EmailComposePage() {
   const location = useLocation()
   const [people, setPeople] = useState<CsvParticipant[]>([])
@@ -51,7 +53,7 @@ export function EmailComposePage() {
   async function sendTest() {
     setBusy(true); setError(''); setMessage('')
     try {
-      const response = await api.emailTest({ to: testTo.trim(), sender_name: 'Tech Roulette', reply_to: null, subject, body,
+      const response = await api.emailTest({ to: testTo.trim(), sender_name: SENDER_NAME, reply_to: null, subject, body,
         ...(chosen.length ? { participant_id: chosen[0].id, attach_certificate: attach } : {}) })
       setMessage(`Test email accepted for ${response.recipient}. Message ID: ${response.message_id}`)
     } catch (err) { setError(err instanceof Error ? err.message : 'Test email failed') }
@@ -82,7 +84,7 @@ export function EmailComposePage() {
     if (!review) return
     setBusy(true); setError(''); setMessage(''); setProgress('Starting send…')
     try {
-      const response = await api.createCampaign({ selection: 'selected', participant_ids: [...selected], name: attach ? 'Certificate Email' : 'Participant Email', email_template_id: null, sender_name: 'Tech Roulette', reply_to: null, subject, body, attach_certificate: attach, send_mode: 'now', confirmed: true, expected_recipients: review.recipients_ready })
+      const response = await api.createCampaign({ selection: 'selected', participant_ids: [...selected], name: attach ? 'Certificate Email' : 'Participant Email', email_template_id: null, sender_name: SENDER_NAME, reply_to: null, subject, body, attach_certificate: attach, send_mode: 'now', confirmed: true, expected_recipients: review.recipients_ready })
       await finish(response.id, response.status)
     } catch (err) { setError(err instanceof Error ? err.message : 'Sending stopped. Check Send History for pending recipients.') }
     finally { setBusy(false); setProgress('') }

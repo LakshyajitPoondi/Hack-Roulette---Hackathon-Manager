@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     email_mode: str = "development"
     brevo_api_key: str | None = None
     email_from: str | None = None
-    email_from_name: str = "Tech Roulette"
+    email_from_name: str = "Department of Artificial Intelligence & Data Science"
     email_reply_to: str | None = None
 
     @field_validator("jwt_secret")

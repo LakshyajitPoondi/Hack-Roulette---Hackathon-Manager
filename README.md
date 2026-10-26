@@ -56,7 +56,7 @@ Do not commit the real URL or hardcode it in React source. For local development
 
 Admins can upload a PNG, JPG, or single-page PDF template; drag the participant name and college to their positions; preview the final PDF; and activate the template. Preview and participant downloads render on demand.
 
-Email subjects/bodies support `{{participant_name}}` and `{{college_name}}`. Keep `EMAIL_MODE=development` for simulated sends. For real delivery set `EMAIL_MODE=production`, `BREVO_API_KEY`, and a verified `EMAIL_FROM`; `EMAIL_FROM_NAME` defaults to `Tech Roulette` and `EMAIL_REPLY_TO` is optional. Keep the API key in backend/Vercel server settings, never in a `VITE_` variable.
+Email subjects/bodies support `{{participant_name}}` and `{{college_name}}`. Keep `EMAIL_MODE=development` for simulated sends. For real delivery set `EMAIL_MODE=production`, `BREVO_API_KEY`, and a verified `EMAIL_FROM`; `EMAIL_FROM_NAME` defaults to `Department of Artificial Intelligence & Data Science` and `EMAIL_REPLY_TO` is optional. Keep the API key in backend/Vercel server settings, never in a `VITE_` variable.
 
 The default **Only participants not already sent** option checks successful certificate deliveries across certificate campaigns, or successful plain-email deliveries with the same campaign name. **All selected participants** still skips prior successful recipients unless the admin checks **RESEND**. Retry Failed only processes failed rows. Brevo acceptance is recorded as `SENT` with its `messageId`; a failed request is recorded as `FAILED` with a reason. A `SKIPPED` row can appear if another campaign sent to that participant after this campaign was created.
 
