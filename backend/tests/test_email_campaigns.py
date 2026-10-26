@@ -135,6 +135,28 @@ def test_scoped_unsent_and_explicit_resend(client, make_user, login, fake_sheet,
     assert sent == ["First", "First", "First"]
 
 
+def test_summary_lists_already_sent_and_send_again(client, make_user, login, fake_sheet, monkeypatch):
+    from app.services import campaign_processor
+    admin = make_user(Role.ADMIN, "again@example.com"); login(admin.email)
+    fake_sheet.people = [fake_sheet.make(2, "Alex", "alex@example.com"), fake_sheet.make(3, "Sam", "sam@example.com")]
+    sent = []
+    class Provider:
+        def send(self, **kwargs):
+            sent.append(kwargs["to"])
+            return f"message-{len(sent)}"
+    monkeypatch.setattr(campaign_processor, "provider", lambda: Provider())
+    base = {"selection": "selected", "name": "Participant Email", "attach_certificate": False}
+    payload = {**base, "sender_name": "Sender", "subject": "Hi", "body": "Hello", "confirmed": True}
+    assert client.post("/api/email/campaigns", json={**payload, "participant_ids": [2]}).status_code == 201
+    summary = client.post("/api/email/recipients/summary", json={**base, "participant_ids": [2, 3]}).json()
+    assert summary["recipients_ready"] == 1 and summary["resend_ready"] == 2
+    assert summary["already_sent"] == [{"id": 2, "name": "Alex", "email": "alex@example.com"}]
+    again = client.post("/api/email/campaigns", json={**payload, "participant_ids": [2, 3], "resend": True, "send_to": "all",
+                                                      "expected_recipients": summary["resend_ready"]})
+    assert again.status_code == 201 and again.json()["recipients"] == 2
+    assert sent == ["alex@example.com", "alex@example.com", "sam@example.com"]
+
+
 def test_brevo_failure_is_recorded_and_test_email_stays_separate(client, make_user, login, fake_sheet, monkeypatch):
     from app.services import campaign_processor
     admin = make_user(Role.ADMIN, "failure@example.com"); login(admin.email)

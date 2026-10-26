@@ -224,8 +224,13 @@ def recipient_summary(payload: Selection, db: Database, _: Admin):
         raise HTTPException(422, "Select at least one participant")
     people, ambiguous = recipients(db, **payload.model_dump())
     result = classify(db, people)
+    # The same selection with history ignored: what an explicit "send again" would reach.
+    everyone, _ = recipients(db, **{**payload.model_dump(), "resend": True, "send_to": "all"})
+    kept = {person.id for person in people} | set(ambiguous)
+    already_sent = [{"id": p.id, "name": p.name, "email": p.email} for p in everyone if p.id not in kept]
     return {**{key: value for key, value in result.items() if key != "ready"},
-            "history_ambiguous": len(ambiguous), "history_ambiguous_ids": ambiguous}
+            "history_ambiguous": len(ambiguous), "history_ambiguous_ids": ambiguous,
+            "already_sent": already_sent, "resend_ready": classify(db, everyone)["recipients_ready"]}
 
 
 @router.get("/campaigns")
