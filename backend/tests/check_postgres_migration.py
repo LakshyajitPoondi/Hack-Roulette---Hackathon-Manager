@@ -94,6 +94,22 @@ def main():
             assert sql("SELECT count(*) FROM dataset_participants") == "2"
             assert sql("SELECT team_name IS NULL FROM email_deliveries WHERE id=1") == "t"
             assert sql(frozen_query) == frozen
+            # The bulk-download feature adds private temporary tables without touching historical data.
+            export_migration = root / "backend/migrations/20261027_certificate_exports.sql"
+            sql_file(export_migration)
+            sql("""
+                INSERT INTO certificate_exports(id,created_by,expires_at,template_id,template_snapshot,file_data)
+                VALUES('00000000-0000-0000-0000-000000000001',1,NOW()+INTERVAL '2 hours',1,'{"name":"Export snapshot"}',decode('010203','hex'));
+                INSERT INTO certificate_export_recipients(export_id,participant_id,name,filename)
+                VALUES('00000000-0000-0000-0000-000000000001',101,'John','John_101.pdf');
+            """)
+            sql_file(export_migration)
+            assert sql("SELECT count(*) FROM certificate_exports") == "1"
+            assert sql("SELECT count(*) FROM certificate_export_recipients") == "1"
+            assert sql("SELECT count(*) FROM pg_class WHERE relname IN ('certificate_exports','certificate_export_recipients') AND relrowsecurity") == "2"
+            sql("DELETE FROM certificate_exports WHERE id='00000000-0000-0000-0000-000000000001'")
+            assert sql("SELECT count(*) FROM certificate_export_recipients") == "0"
+            assert sql(history_query) == before
             sql("""
                 UPDATE email_campaigns SET dataset_id=(SELECT id FROM datasets LIMIT 1) WHERE id=1;
                 DO $$ BEGIN
@@ -109,7 +125,8 @@ def main():
             sql_file(schema_path, "fresh_check")
             assert sql("SELECT count(*) FROM datasets", "fresh_check") == "0"
             assert sql("SELECT count(*) FROM email_deliveries", "fresh_check") == "0"
-            print("PostgreSQL migration checks passed: legacy data/IDs, shared-email memberships, snapshots, restricted deletion, repeat upgrade and fresh bootstrap.")
+            assert sql("SELECT count(*) FROM certificate_exports", "fresh_check") == "0"
+            print("PostgreSQL migration checks passed: existing history, repeat upgrades, fresh bootstrap, private certificate export tables and cascading cleanup.")
         finally:
             if started:
                 run("pg_ctl", "-D", data, "-m", "fast", "-w", "stop")

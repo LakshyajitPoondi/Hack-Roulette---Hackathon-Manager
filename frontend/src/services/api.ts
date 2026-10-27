@@ -4,6 +4,8 @@ import type { BulkAction, FilterOptions, Participant, ParticipantChanges, Partic
 import type { CertificateFont, CertificateRow, CertificateTemplate } from '../types/certificate'
 import type { Campaign, CampaignInput, EmailTemplate, RecipientSelection, RecipientSummary } from '../types/email'
 import type { Dataset, DatasetPreview, DatasetRow, DatasetSummary } from '../types/dataset'
+import type { CertificateExport, ExportInput } from '../types/certificateExport'
+import { ExportStoppedError } from './certificateExport'
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message) }
@@ -48,6 +50,8 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 }
 
 export const api = {
+  createCertificateExport: (input: ExportInput) => request<CertificateExport>('/api/certificates/exports', { method: 'POST', body: JSON.stringify(input), cache: 'no-store' }),
+  deleteCertificateExport: (id: string) => request<void>(`/api/certificates/exports/${id}`, { method: 'DELETE', keepalive: true }),
   datasets: () => request<DatasetSummary[]>('/api/datasets'),
   dataset: (id: number) => request<Dataset>(`/api/datasets/${id}`),
   uploadDataset: (name: string, file: File) => { const body = new FormData(); body.set('name', name); body.set('file', file); return request<Dataset>('/api/datasets', { method: 'POST', body }) },
@@ -102,6 +106,20 @@ export const api = {
   campaign: (id: number) => request<Campaign>(`/api/email/campaigns/${id}`),
   continueCampaign: (id: number) => request<{ status: string; processed: number }>(`/api/email/campaigns/${id}/continue`, { method: 'POST' }),
   retryCampaign: (id: number) => request<{ retried: number; status: string }>(`/api/email/campaigns/${id}/retry`, { method: 'POST' }),
+}
+
+export async function fetchExportPdf(exportId: string, participantId: number, signal: AbortSignal) {
+  const path = `/api/certificates/exports/${exportId}/participants/${participantId}`
+  let response: Response
+  try { response = await fetch(`${apiUrl}${path}`, { credentials: 'include', cache: 'no-store', signal }) }
+  catch { throw new ExportStoppedError(signal.aborted ? 'Generation stopped.' : 'Connection lost. Check your connection and start a new run.') }
+  if (!response.ok) {
+    const error = await failure(response, path)
+    if (response.status === 401) unauthorizedListeners.forEach(listener => listener())
+    if ([401, 403, 404].includes(response.status)) throw new ExportStoppedError(error.message)
+    throw error
+  }
+  return new Uint8Array(await response.arrayBuffer())
 }
 
 export async function downloadDataset(id: number, original = false) {

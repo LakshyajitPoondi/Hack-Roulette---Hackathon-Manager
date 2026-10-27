@@ -54,6 +54,8 @@ Do not commit the real URL or hardcode it in React source. For local development
 
 ## Certificates and email
 
+Generate Certificate also supports selected/all participants in a chosen dataset or across datasets, with real generation progress and a private ZIP download that sends no email. Existing deployments must apply [the bulk-export migration](backend/migrations/20261027_certificate_exports.sql) before using it. See [bulk download architecture, limits and validation](docs/bulk-certificate-download.md).
+
 Admins can upload a PNG, JPG, or single-page PDF template; drag the participant name and college to their positions; preview the final PDF; and activate the template. Preview and participant downloads render on demand.
 
 Email subjects/bodies support `{{participant_name}}` and `{{college_name}}`. Keep `EMAIL_MODE=development` for simulated sends. For real delivery set `EMAIL_MODE=production`, `BREVO_API_KEY`, and a verified `EMAIL_FROM`; `EMAIL_FROM_NAME` defaults to `Department of Artificial Intelligence & Data Science` and `EMAIL_REPLY_TO` is optional. Keep the API key in backend/Vercel server settings, never in a `VITE_` variable.

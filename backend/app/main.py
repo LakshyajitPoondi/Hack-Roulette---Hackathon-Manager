@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from urllib.parse import urlsplit
 
-from app.api import admin, auth, certificates, datasets, emails, participants
+from app.api import admin, auth, certificate_exports, certificates, datasets, emails, participants
 from app.core.config import get_settings
 
 settings = get_settings()
@@ -29,6 +29,7 @@ app.include_router(admin.router)
 app.include_router(participants.router)
 app.include_router(datasets.router)
 app.include_router(certificates.router)
+app.include_router(certificate_exports.router)
 app.include_router(emails.router)
 
 
