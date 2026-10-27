@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { ApiError, api } from '../services/api'
 import type { CsvParticipant } from '../types/participant'
 import type { Campaign, EmailTemplate, RecipientSummary } from '../types/email'
+import type { CertificateTemplate } from '../types/certificate'
+import type { DatasetSummary } from '../types/dataset'
 
 const SENDER_NAME = 'Department of Artificial Intelligence & Data Science'
 
@@ -12,6 +14,12 @@ export function EmailComposePage() {
   const [recipientState, setRecipientState] = useState<'loading' | 'ready' | 'error'>('loading')
   const [recipientError, setRecipientError] = useState('')
   const [templates, setTemplates] = useState<EmailTemplate[]>([])
+  const [certificates, setCertificates] = useState<CertificateTemplate[]>([])
+  const [certificateId, setCertificateId] = useState<number | undefined>()
+  const [emailTemplateId, setEmailTemplateId] = useState<number | null>(null)
+  const [datasets, setDatasets] = useState<DatasetSummary[]>([])
+  const [datasetId, setDatasetId] = useState<number | undefined>((location.state as { datasetId?: number } | null)?.datasetId)
+  const loadVersion = useRef(0)
   const [mode, setMode] = useState('')
   const [selected, setSelected] = useState<Set<number>>(() => new Set((location.state as { participantIds?: number[] } | null)?.participantIds || []))
   const [search, setSearch] = useState('')
@@ -27,25 +35,33 @@ export function EmailComposePage() {
   const [message, setMessage] = useState('')
   const [emailPreview, setEmailPreview] = useState<{ subject: string; body: string; participant: string } | null>(null)
   function loadRecipients() {
+    const version = ++loadVersion.current
     setRecipientState('loading')
     setRecipientError('')
-    api.allCsvParticipants().then(items => { setPeople(items); setRecipientState('ready') }).catch(err => {
+    api.allCsvParticipants(datasetId).then(items => { if (version === loadVersion.current) { setPeople(items); setRecipientState('ready') } }).catch(err => {
+      if (version !== loadVersion.current) return
       setRecipientState('error')
       setRecipientError(err instanceof ApiError && err.status === 422
         ? 'This server does not support the imported-participants list yet. Deploy or restart the updated FastAPI backend, then try again.'
         : err instanceof Error ? err.message : 'Could not load recipients.')
     })
   }
-  useEffect(() => { loadRecipients(); api.emailTemplates().then(setTemplates).catch(err => setError(err.message)); api.emailMode().then(value => setMode(value.mode)).catch(err => setError(err.message)) }, [])
+  useEffect(() => { loadRecipients(); return () => { loadVersion.current++ } }, [datasetId])
+  useEffect(() => {
+    api.emailTemplates().then(setTemplates).catch(err => setError(err.message))
+    api.emailMode().then(value => setMode(value.mode)).catch(err => setError(err.message))
+    api.datasets().then(setDatasets).catch(err => setError(err.message))
+    api.templates().then(items => { setCertificates(items); setCertificateId((items.find(t => t.is_active) ?? items[0])?.id) }).catch(err => setError(err.message))
+  }, [])
   const filtered = useMemo(() => people.filter(person => `${person.name} ${person.email} ${person.college ?? ''} ${person.team_name ?? ''}`.toLocaleLowerCase().includes(search.toLocaleLowerCase())), [people, search])
   const chosen = people.filter(person => selected.has(person.id))
   function toggle(id: number) { setSelected(previous => { const next = new Set(previous); if (next.has(id)) next.delete(id); else next.add(id); return next }); setReview(null); setEmailPreview(null) }
-  function selectTemplate(id: string) { const template = templates.find(item => item.id === Number(id)); if (template) { setSubject(template.subject); setBody(template.body) } setReview(null); setEmailPreview(null) }
+  function selectTemplate(id: string) { setEmailTemplateId(id ? Number(id) : null); const template = templates.find(item => item.id === Number(id)); if (template) { setSubject(template.subject); setBody(template.body) } setReview(null); setEmailPreview(null) }
   async function showEmailPreview() {
     if (!chosen.length) return
     setBusy(true); setError('')
     try {
-      const rendered = await api.emailPreview(subject, body, chosen[0].id, attach)
+      const rendered = await api.emailPreview(subject, body, chosen[0].id, attach, certificateId)
       setEmailPreview({ ...rendered, participant: [chosen[0].name, chosen[0].college].filter(Boolean).join(' · ') })
     } catch (err) { setError(err instanceof Error ? err.message : 'Could not preview email.') }
     finally { setBusy(false) }
@@ -54,14 +70,14 @@ export function EmailComposePage() {
     setBusy(true); setError(''); setMessage('')
     try {
       const response = await api.emailTest({ to: testTo.trim(), sender_name: SENDER_NAME, reply_to: null, subject, body,
-        ...(chosen.length ? { participant_id: chosen[0].id, attach_certificate: attach } : {}) })
+        certificate_template_id: certificateId, ...(chosen.length ? { participant_id: chosen[0].id, attach_certificate: attach } : {}) })
       setMessage(`Test email accepted for ${response.recipient}. Message ID: ${response.message_id}`)
     } catch (err) { setError(err instanceof Error ? err.message : 'Test email failed') }
     finally { setBusy(false) }
   }
   async function showReview() {
     setBusy(true); setError('')
-    try { setReview(await api.recipientSummary({ selection: 'selected', participant_ids: [...selected], attach_certificate: attach, name: attach ? 'Certificate Email' : 'Participant Email' })) }
+    try { if (attach && !certificateId) throw new Error('Choose a certificate template or turn off attachments.'); setReview(await api.recipientSummary({ selection: 'selected', participant_ids: [...selected], dataset_id: datasetId, attach_certificate: attach, name: attach ? 'Certificate Email' : 'Participant Email' })) }
     catch (err) { setError(err instanceof Error ? err.message : 'Could not review recipients') }
     finally { setBusy(false) }
   }
@@ -85,7 +101,7 @@ export function EmailComposePage() {
     if (!review) return
     setBusy(true); setError(''); setMessage(''); setProgress('Starting send…')
     try {
-      const response = await api.createCampaign({ selection: 'selected', participant_ids: [...selected], name: attach ? 'Certificate Email' : 'Participant Email', email_template_id: null, sender_name: SENDER_NAME, reply_to: null, subject, body, attach_certificate: attach, send_mode: 'now', confirmed: true,
+      const response = await api.createCampaign({ selection: 'selected', participant_ids: [...selected], dataset_id: datasetId, certificate_template_id: certificateId, name: attach ? 'Certificate Email' : 'Participant Email', email_template_id: emailTemplateId, sender_name: SENDER_NAME, reply_to: null, subject, body, attach_certificate: attach, send_mode: 'now', confirmed: true,
         ...(again ? { resend: true, send_to: 'all' as const } : {}), expected_recipients: again ? review.resend_ready : review.recipients_ready })
       await finish(response.id, response.status)
     } catch (err) { setError(err instanceof Error ? err.message : 'Sending stopped. Check Send History for pending recipients.') }
@@ -102,6 +118,8 @@ export function EmailComposePage() {
     <div className="admin-page-heading"><div><span className="eyebrow">/ STEPS 5–8</span><h1>COMPOSE EMAIL<span>.</span></h1><p>Select recipients, write a message, review, and send.</p></div><Link className="button button-outline" to="/admin/email/campaigns">SEND HISTORY →</Link></div>
     {error && <div className="form-error" role="alert">{error}</div>}{message && <div className="form-success" role="status">{message}</div>}
     {mode === 'development' && <div className="admin-notice"><span>ⓘ</span><p>Email is in development mode. Sends are simulated until EMAIL_MODE is set to production.</p></div>}
+    <fieldset className="csv-workspace" disabled={busy}>
+    <section className="admin-info-card email-form"><label>Recipient dataset<select value={datasetId ?? ''} onChange={e => { setDatasetId(e.target.value ? Number(e.target.value) : undefined); setSelected(new Set()); setReview(null); setEmailPreview(null) }}><option value="">All participants</option>{datasets.filter(d => !d.archived).map(d => <option key={d.id} value={d.id}>{d.name} · {d.participant_count} participants</option>)}</select></label><Link to="/admin/csv">Manage saved CSV datasets →</Link></section>
     <section className="admin-info-card"><h2>1. SELECT RECIPIENTS</h2>{recipientState === 'loading' ? <p>Loading imported participants…</p> : recipientState === 'error' ? <div role="alert"><p>{recipientError}</p><button className="button button-outline" type="button" onClick={loadRecipients}>TRY AGAIN →</button></div> : people.length === 0 ? <p>No participants imported. <Link to="/admin/participants">Upload a CSV →</Link></p> : <><div className="csv-toolbar"><input type="search" aria-label="Search recipients" placeholder="Search participants…" value={search} onChange={event => setSearch(event.target.value)} /><button type="button" onClick={() => { setSelected(previous => new Set([...previous, ...filtered.map(person => person.id)])); setReview(null) }}>SELECT ALL{search && ' MATCHING'}</button><button type="button" onClick={() => { setSelected(new Set()); setReview(null) }}>DESELECT ALL</button><strong>{chosen.length} PARTICIPANTS SELECTED</strong></div><div className="email-people">{filtered.map(person => <label key={person.id}><input type="checkbox" checked={selected.has(person.id)} onChange={() => toggle(person.id)} /><span><strong>{person.name}</strong><small>{[person.email, person.college, person.team_name].filter(Boolean).join(' · ')}</small></span></label>)}</div></>}</section>
     {recipientState === 'ready' && chosen.length > 0 && <section className="admin-info-card email-form">
       <h2>2. WRITE EMAIL</h2>
@@ -111,12 +129,14 @@ export function EmailComposePage() {
       <div className="email-placeholders"><strong>AVAILABLE PLACEHOLDERS</strong><p><code>{'{{participant_name}}'}</code> — participant's name</p><p><code>{'{{college_name}}'}</code> — participant's college</p><p>Replaced separately for each selected participant when emails are sent. Existing [name] and [college] also work.</p></div>
       <button type="button" disabled={busy || !subject.trim() || !body.trim()} onClick={() => void showEmailPreview()}>PREVIEW AS {chosen[0].name.toUpperCase()}</button>
       {emailPreview && <div className="email-preview"><span>PREVIEWING AS {emailPreview.participant}</span><strong>Subject</strong><pre>{emailPreview.subject}</pre><strong>Message</strong><pre>{emailPreview.body}</pre></div>}
-      <label className="email-check"><input type="checkbox" checked={attach} onChange={event => { setAttach(event.target.checked); setReview(null) }} /> Attach personalized certificate</label>
+      <label className="email-check"><input type="checkbox" checked={attach} onChange={event => { setAttach(event.target.checked); setReview(null); setEmailPreview(null) }} /> Attach personalized certificate</label>
+      {attach && <label>Selected certificate<select value={certificateId ?? ''} onChange={e => { setCertificateId(e.target.value ? Number(e.target.value) : undefined); setReview(null); setEmailPreview(null) }}><option value="" disabled>Choose a certificate…</option>{certificates.map(t => <option key={t.id} value={t.id}>{t.name}{t.is_active ? ' (active)' : ''}</option>)}</select>{!certificates.length && <span>No certificate templates available. <Link to="/admin/templates?tab=certificates">Create a certificate →</Link></span>}</label>}
       <div className="csv-file-row"><label>Test email address<input type="email" placeholder="admin@example.com" value={testTo} onChange={event => setTestTo(event.target.value)} /></label><button type="button" disabled={busy || !testTo || !subject.trim() || !body.trim()} onClick={() => void sendTest()}>SEND TEST EMAIL</button></div>
       <p>The test uses the first selected participant ({chosen[0].name}){attach ? ' and their certificate' : ''}.</p>
       <button className="button button-dark" type="button" disabled={busy || !subject.trim() || !body.trim()} onClick={() => void showReview()}>REVIEW SEND →</button>
     </section>}
-    {review && <section className="admin-info-card"><h2>3. REVIEW AND SEND</h2><p>You selected {selected.size} participants. {review.recipients_ready} are ready to send; {selected.size - review.recipients_ready} were already sent or are unavailable.</p>{review.history_ambiguous > 0 && <div className="form-error" role="status">LEFT OUT: {review.history_ambiguous} selected participant(s) share an email with an older send that cannot be matched to one person. They are not sent automatically, to avoid a possible duplicate. Check Campaigns history for that email.</div>}{review.already_sent.length > 0 && <div className="form-error" role="status">ALREADY SENT: You have already sent this email to {review.already_sent.map(person => `${person.name} (${person.email})`).join(', ')}. They are left out unless you choose SEND AGAIN.</div>}<p>Certificates attached: <strong>{attach ? 'YES' : 'NO'}</strong></p><div className="certificate-actions"><button type="button" disabled={busy} onClick={() => setReview(null)}>CANCEL</button><button type="button" disabled={busy || review.recipients_ready === 0} onClick={() => void send()}>{busy ? 'SENDING…' : `SEND ${review.recipients_ready} EMAILS`}</button>{review.already_sent.length > 0 && <button type="button" className="resend-button" disabled={busy || review.resend_ready === 0} onClick={() => void send(true)}>{busy ? 'SENDING…' : `SEND AGAIN TO ALL ${review.resend_ready} (INCLUDES ${review.already_sent.length} ALREADY SENT)`}</button>}</div></section>}
+    {review && <section className="admin-info-card"><h2>3. REVIEW AND SEND</h2><p>You selected {selected.size} participants. {review.recipients_ready} are ready to send; {selected.size - review.recipients_ready} were already sent or are unavailable.</p>{review.history_ambiguous > 0 && <div className="form-error" role="status">LEFT OUT: {review.history_ambiguous} selected participant(s) share an email with an older send that cannot be matched to one person. They are not sent automatically, to avoid a possible duplicate. Check Campaigns history for that email.</div>}{review.already_sent.length > 0 && <div className="form-error" role="status">ALREADY SENT: You have already sent this email to {review.already_sent.map(person => `${person.name} (${person.email})`).join(', ')}. They are left out unless you choose SEND AGAIN.</div>}<p>Certificates attached: <strong>{attach ? certificates.find(t => t.id === certificateId)?.name ?? 'No certificate selected' : 'None'}</strong></p><div className="certificate-actions"><button type="button" disabled={busy} onClick={() => setReview(null)}>CANCEL</button><button type="button" disabled={busy || review.recipients_ready === 0} onClick={() => void send()}>{busy ? 'SENDING…' : `SEND ${review.recipients_ready} EMAILS`}</button>{review.already_sent.length > 0 && <button type="button" className="resend-button" disabled={busy || review.resend_ready === 0} onClick={() => void send(true)}>{busy ? 'SENDING…' : `SEND AGAIN TO ALL ${review.resend_ready} (INCLUDES ${review.already_sent.length} ALREADY SENT)`}</button>}</div></section>}
+    </fieldset>
     {progress && <div className="admin-notice" role="status">Sending emails… {progress}</div>}
     {result && <section className="admin-info-card"><h2>EMAIL RESULTS</h2><div className="csv-counts"><strong>Selected {result.recipient_count}</strong><strong>Sent {result.sent_count}</strong><strong>Failed {result.failed_count}</strong>{result.skipped_count > 0 && <strong>Skipped {result.skipped_count}</strong>}</div>{result.status === 'PROCESSING' && <p>Sending paused. <Link to={`/admin/email/campaigns?sent=${result.id}&interrupted=1`}>Continue in Send History →</Link></p>}{result.failed_count > 0 && <><h3>FAILED RECIPIENTS</h3><div className="participant-table-wrap"><table className="participants-table csv-table"><thead><tr><th>NAME</th><th>EMAIL</th><th>REASON</th></tr></thead><tbody>{result.deliveries?.filter(item => item.status === 'FAILED').map(item => <tr key={item.id}><td>{item.participant_name}</td><td>{item.email}</td><td>{item.failure_reason}</td></tr>)}</tbody></table></div><button type="button" className="button button-dark" disabled={busy || !result.deliveries?.some(item => item.status === 'FAILED' && item.attempt_count < 3)} onClick={() => void retryFailed()}>RETRY FAILED</button></>}</section>}
   </>

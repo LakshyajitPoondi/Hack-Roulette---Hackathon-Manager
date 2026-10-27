@@ -1,4 +1,5 @@
 import io
+from types import SimpleNamespace
 
 from fastapi import HTTPException
 from PIL import Image, UnidentifiedImageError
@@ -42,6 +43,22 @@ def get_template(db: Session, template_id: int) -> CertificateTemplate:
     template = db.get(CertificateTemplate, template_id)
     if not template: raise HTTPException(404, "Template not found")
     return template
+
+
+def selected_template(db: Session, template_id: int | None):
+    return get_template(db, template_id) if template_id is not None else active_template(db)
+
+
+def snapshot_template(template):
+    omitted = {"id", "file_data", "created_at", "updated_at", "created_by", "is_active"}
+    return {c.name: getattr(template, c.name) for c in CertificateTemplate.__table__.columns if c.name not in omitted}
+
+
+def campaign_template(db, campaign):
+    if campaign.certificate_snapshot is not None:
+        return SimpleNamespace(**campaign.certificate_snapshot, file_data=campaign.certificate_file_data)
+    # Compatibility for unmigrated legacy campaigns. New campaigns always have an immutable snapshot.
+    return get_template(db, campaign.certificate_template_id)
 
 
 def cased(template: CertificateTemplate | None, field: str, text: str) -> str:

@@ -3,6 +3,7 @@ import type { AdminUser, DashboardData, Role } from '../types/admin'
 import type { BulkAction, FilterOptions, Participant, ParticipantChanges, ParticipantFilters, ParticipantPage, CsvParticipant, CsvParticipantPage, CsvPreview, CsvImportResult, ParticipantInput } from '../types/participant'
 import type { CertificateFont, CertificateRow, CertificateTemplate } from '../types/certificate'
 import type { Campaign, CampaignInput, EmailTemplate, RecipientSelection, RecipientSummary } from '../types/email'
+import type { Dataset, DatasetPreview, DatasetRow, DatasetSummary } from '../types/dataset'
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message) }
@@ -47,6 +48,14 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 }
 
 export const api = {
+  datasets: () => request<DatasetSummary[]>('/api/datasets'),
+  dataset: (id: number) => request<Dataset>(`/api/datasets/${id}`),
+  uploadDataset: (name: string, file: File) => { const body = new FormData(); body.set('name', name); body.set('file', file); return request<Dataset>('/api/datasets', { method: 'POST', body }) },
+  renameDataset: (id: number, name: string) => request<DatasetSummary>(`/api/datasets/${id}`, { method: 'PATCH', body: JSON.stringify({ name }) }),
+  archiveDataset: (id: number, archived: boolean) => request<DatasetSummary>(`/api/datasets/${id}/archive?archived=${archived}`, { method: 'POST' }),
+  saveDataset: (id: number, revision: number, rows: DatasetRow[]) => request<Dataset>(`/api/datasets/${id}/draft`, { method: 'PATCH', body: JSON.stringify({ revision, rows }) }),
+  previewDataset: (id: number, approved_rows: number[] = []) => request<DatasetPreview>(`/api/datasets/${id}/preview`, { method: 'POST', body: JSON.stringify({ approved_rows }) }),
+  importDataset: (id: number, digest: string, approved_rows: number[]) => request<{ linked: number; reused: number; eligible: number }>(`/api/datasets/${id}/import`, { method: 'POST', body: JSON.stringify({ digest, approved_rows }) }),
   login: (email: string, password: string) => request<{ user: AdminUser }>('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
   logout: () => request<void>('/api/auth/logout', { method: 'POST' }),
   me: () => request<AdminUser>('/api/auth/me'),
@@ -57,8 +66,8 @@ export const api = {
   disableUser: (id: number) => request<void>(`/api/admin/users/${id}`, { method: 'DELETE' }),
   changePassword: (data: { current_password: string; new_password: string; confirm_new_password: string }) => request<void>('/api/auth/change-password', { method: 'POST', body: JSON.stringify(data) }),
   participants: (filters: ParticipantFilters, page: number, pageSize = 50) => request<ParticipantPage>(`/api/participants?${participantParams(filters, page, pageSize)}`),
-  csvParticipants: (search = '', sortBy = 'name', sortDir = 'asc', page = 1) => request<CsvParticipantPage>(`/api/participants?${new URLSearchParams({ search, sort_by: sortBy, sort_dir: sortDir, page: String(page), page_size: '50' })}`),
-  allCsvParticipants: () => request<CsvParticipant[]>('/api/participants/all'),
+  csvParticipants: (search = '', sortBy = 'name', sortDir = 'asc', page = 1, datasetId?: number) => request<CsvParticipantPage>(`/api/participants?${new URLSearchParams({ search, sort_by: sortBy, sort_dir: sortDir, page: String(page), page_size: '50', ...(datasetId ? { dataset_id: String(datasetId) } : {}) })}`),
+  allCsvParticipants: (datasetId?: number) => request<CsvParticipant[]>(`/api/participants/all${datasetId ? `?dataset_id=${datasetId}` : ''}`),
   updateCsvParticipant: (id: number, changes: ParticipantInput) => request<CsvParticipant>(`/api/participants/${id}`, { method: 'PATCH', body: JSON.stringify(changes) }),
   createCsvParticipant: (person: ParticipantInput) => request<CsvParticipant>('/api/participants', { method: 'POST', body: JSON.stringify(person) }),
   previewCsv: (file: File) => { const body = new FormData(); body.set('file', file); return request<CsvPreview>('/api/participants/import/preview', { method: 'POST', body }) },
@@ -83,16 +92,25 @@ export const api = {
   emailMode: () => request<{ mode: string; sending_enabled: boolean }>('/api/email/mode'),
   emailTemplates: () => request<EmailTemplate[]>('/api/email/templates'),
   createEmailTemplate: (data: Pick<EmailTemplate, 'name' | 'subject' | 'body'>) => request<EmailTemplate>('/api/email/templates', { method: 'POST', body: JSON.stringify(data) }),
-  updateEmailTemplate: (id: number, data: Pick<EmailTemplate, 'name' | 'subject' | 'body'>) => request<EmailTemplate>(`/api/email/templates/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  updateEmailTemplate: (id: number, data: Partial<Pick<EmailTemplate, 'name' | 'subject' | 'body'>>) => request<EmailTemplate>(`/api/email/templates/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteEmailTemplate: (id: number) => request<void>(`/api/email/templates/${id}`, { method: 'DELETE' }),
-  emailPreview: (subject: string, body: string, participant_id?: number, attach_certificate = false) => request<{ subject: string; body: string }>('/api/email/preview', { method: 'POST', body: JSON.stringify({ name: 'Preview', subject, body, participant_id, attach_certificate }) }),
-  emailTest: (data: { to: string; sender_name: string; reply_to: string | null; subject: string; body: string; participant_id?: number; attach_certificate?: boolean }) => request<{ recipient: string; message_id: string; mode: string }>('/api/email/test', { method: 'POST', body: JSON.stringify(data) }),
+  emailPreview: (subject: string, body: string, participant_id?: number, attach_certificate = false, certificate_template_id?: number) => request<{ subject: string; body: string }>('/api/email/preview', { method: 'POST', body: JSON.stringify({ name: 'Preview', subject, body, participant_id, attach_certificate, certificate_template_id }) }),
+  emailTest: (data: { to: string; sender_name: string; reply_to: string | null; subject: string; body: string; participant_id?: number; attach_certificate?: boolean; certificate_template_id?: number }) => request<{ recipient: string; message_id: string; mode: string }>('/api/email/test', { method: 'POST', body: JSON.stringify(data) }),
   recipientSummary: (data: RecipientSelection) => request<RecipientSummary>('/api/email/recipients/summary', { method: 'POST', body: JSON.stringify(data) }),
   createCampaign: (data: CampaignInput) => request<{ id: number; status: string; recipients: number; skipped_invalid: number }>('/api/email/campaigns', { method: 'POST', body: JSON.stringify(data) }),
   campaigns: () => request<Campaign[]>('/api/email/campaigns'),
   campaign: (id: number) => request<Campaign>(`/api/email/campaigns/${id}`),
   continueCampaign: (id: number) => request<{ status: string; processed: number }>(`/api/email/campaigns/${id}/continue`, { method: 'POST' }),
   retryCampaign: (id: number) => request<{ retried: number; status: string }>(`/api/email/campaigns/${id}/retry`, { method: 'POST' }),
+}
+
+export async function downloadDataset(id: number, original = false) {
+  const path = `/api/datasets/${id}/export?original=${original}`
+  const response = await fetch(`${apiUrl}${path}`, { credentials: 'include' })
+  if (!response.ok) throw await failure(response, path)
+  const url = URL.createObjectURL(await response.blob())
+  const anchor = document.createElement('a'); anchor.href = url; anchor.download = `dataset-${id}${original ? '-original.txt' : '.csv'}`; anchor.click()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
 export async function finishCampaign(id: number, initialStatus: string) {

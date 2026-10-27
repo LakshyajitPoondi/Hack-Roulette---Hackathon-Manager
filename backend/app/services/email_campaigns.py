@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.models.email import EmailCampaign, EmailDelivery
 from app.models.participant import Participant, identity_part
+from app.models.dataset import DatasetParticipant
 
 
 def utcnow():
@@ -68,9 +69,12 @@ def send_history(db: Session, people: list[Participant], *, name: str, attach_ce
 def recipients(db: Session, *, selection: str, participant_ids: list[int] | None,
                college: str | None, attendance: str | None, name: str = "Tech Roulette certificates",
                attach_certificate: bool = True, resend: bool = False,
-               send_to: str = "unsent", **_) -> tuple[list[Participant], list[int]]:
+               send_to: str = "unsent", dataset_id: int | None = None, **_) -> tuple[list[Participant], list[int]]:
     """Return (recipients, IDs left out because older shared-email history is ambiguous)."""
-    people = list(db.scalars(select(Participant).order_by(Participant.id)))
+    query = select(Participant).order_by(Participant.id)
+    if dataset_id is not None:
+        query = query.join(DatasetParticipant).where(DatasetParticipant.dataset_id == dataset_id)
+    people = list(db.scalars(query))
     if selection == "selected":
         ids = set(participant_ids or []); people = [p for p in people if p.id in ids]
     elif selection == "filtered":
@@ -95,6 +99,8 @@ def classify(db: Session, people: list[Participant]):
 def campaign_data(campaign: EmailCampaign):
     deliveries = campaign.deliveries
     return {"id": campaign.id, "name": campaign.name, "email_template_id": campaign.email_template_id,
+            "dataset_id": campaign.dataset_id,
+            "certificate_template_name": (campaign.certificate_snapshot or {}).get("name"),
             "email_template_name": campaign.email_template.name if campaign.email_template else None,
             "certificate_template_id": campaign.certificate_template_id, "sender_name": campaign.sender_name,
             "reply_to": campaign.reply_to, "subject": campaign.subject, "body": campaign.body,

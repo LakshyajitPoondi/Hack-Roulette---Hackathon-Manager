@@ -9,8 +9,11 @@ from sqlalchemy.orm import Session
 from app.auth.dependencies import current_user, require_role
 from app.db.session import get_db
 from app.models.participant import Participant, identity_part
+from app.models.dataset import Dataset, DatasetParticipant
+from app.models.email import EmailDelivery
 from app.models.user import Role, User
 from app.services import csv_participants
+from app.services import datasets as dataset_service
 from app.services.db_participants import get_person, list_people
 
 router = APIRouter(prefix="/api/participants", tags=["participants"])
@@ -47,8 +50,8 @@ class ParticipantEdit(BaseModel):
 def participants(db: Database, _: Reader, search: str = Query(default="", max_length=160),
                  sort_by: Literal["name", "email", "team_name", "college", "created_at"] = "name",
                  sort_dir: Literal["asc", "desc"] = "asc", page: int = Query(default=1, ge=1),
-                 page_size: int = Query(default=50, ge=1, le=500)):
-    return list_people(db, search, sort_by, sort_dir, page, page_size)
+                 page_size: int = Query(default=50, ge=1, le=500), dataset_id: int | None = None):
+    return list_people(db, search, sort_by, sort_dir, page, page_size, dataset_id)
 
 
 EXACT_DUPLICATE = "A participant with this name and email already exists."
@@ -82,8 +85,11 @@ def create_participant(payload: ParticipantEdit, db: Database, _: Manager):
 
 
 @router.get("/all")
-def all_participants(db: Database, _: Manager):
-    return list(db.scalars(select(Participant).order_by(Participant.name, Participant.id)))
+def all_participants(db: Database, _: Manager, dataset_id: int | None = None):
+    query = select(Participant).order_by(Participant.name, Participant.id)
+    if dataset_id is not None:
+        query = query.join(DatasetParticipant).where(DatasetParticipant.dataset_id == dataset_id)
+    return list(db.scalars(query))
 
 
 @router.post("/import/preview")
@@ -101,11 +107,26 @@ async def import_participants(db: Database, _: Manager, digest: str = Form(...),
     except ValueError:
         raise HTTPException(422, "approved_lines must be comma-separated line numbers") from None
     data = await file.read(csv_participants.MAX_CSV_BYTES + 1)
-    return csv_participants.import_rows(db, data, digest, approved)
+    result = csv_participants.import_rows(db, data, digest, approved, commit=False)
+    headers, rows = dataset_service.parse(data)
+    item = Dataset(name=(file.filename or "CSV import")[:160], original_filename=(file.filename or "upload.csv")[:255],
+                   original_data=data, headers=headers, original_rows=rows, rows=rows, created_by=_.id)
+    db.add(item); db.flush()
+    mapped = dataset_service.columns(headers)
+    keys = {(identity_part(csv_participants._text(r["cells"][mapped["email"]])),
+             identity_part(csv_participants._text(r["cells"][mapped["name"]]))) for r in rows}
+    for person in db.scalars(select(Participant)):
+        if person.identity in keys:
+            db.add(DatasetParticipant(dataset_id=item.id, participant_id=person.id))
+    db.commit()
+    return result
 
 
 @router.delete("/clear", status_code=204)
 def clear_participants(db: Database, _: Manager):
+    if db.scalar(select(EmailDelivery.id).limit(1)) is not None:
+        raise HTTPException(409, "Participants referenced by send history cannot be cleared. Create or select another dataset.")
+    db.execute(delete(DatasetParticipant))
     db.execute(delete(Participant))
     db.commit()
 
@@ -134,5 +155,8 @@ def update_participant(participant_id: int, payload: ParticipantEdit, db: Databa
 @router.delete("/{participant_id}", status_code=204)
 def delete_participant(participant_id: int, db: Database, _: Manager):
     person = get_person(db, participant_id)
+    if db.scalar(select(EmailDelivery.id).where(EmailDelivery.participant_id == participant_id).limit(1)) is not None:
+        raise HTTPException(409, "This participant is referenced by send history and must be preserved")
+    db.execute(delete(DatasetParticipant).where(DatasetParticipant.participant_id == participant_id))
     db.delete(person)
     db.commit()

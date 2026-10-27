@@ -9,10 +9,10 @@ export function AdminLayout() {
     <NavLink to="/admin/dashboard">▣ <span>Overview</span></NavLink>
     <NavLink to="/admin/participants">☷ <span>Participants</span></NavLink>
     {user?.role !== 'STAFF' && <>
-      <NavLink to="/admin/certificates/templates">▧ <span>Certificate template</span></NavLink>
+      <NavLink to="/admin/csv">☷ <span>CSV Management</span></NavLink>
+      <NavLink to="/admin/templates">▧ <span>Templates</span></NavLink>
       <NavLink to="/admin/certificates">▤ <span>Generate certificate</span></NavLink>
       <NavLink to="/admin/email/compose">✉ <span>Compose email</span></NavLink>
-      <NavLink to="/admin/email/templates">▧ <span>Email templates</span></NavLink>
       <NavLink to="/admin/email/campaigns">◷ <span>Send history</span></NavLink>
     </>}
     <NavLink to="/admin/users">♟ <span>User management</span></NavLink>

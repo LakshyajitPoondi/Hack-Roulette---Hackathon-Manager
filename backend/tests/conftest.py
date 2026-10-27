@@ -4,6 +4,7 @@ os.environ["DATABASE_URL"] = "sqlite://"
 os.environ["JWT_SECRET"] = "test-only-jwt-secret-with-more-than-32-characters"
 os.environ["FRONTEND_ORIGIN"] = "http://127.0.0.1:5173"
 os.environ["COOKIE_SECURE"] = "false"
+os.environ["EMAIL_MODE"] = "development"
 
 import pytest
 from fastapi.testclient import TestClient

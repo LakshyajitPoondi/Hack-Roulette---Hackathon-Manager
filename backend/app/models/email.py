@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, LargeBinary, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -27,6 +27,9 @@ class EmailCampaign(Base):
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     email_template_id: Mapped[int | None] = mapped_column(ForeignKey("email_templates.id", ondelete="SET NULL"))
     certificate_template_id: Mapped[int | None] = mapped_column(ForeignKey("certificate_templates.id", ondelete="SET NULL"))
+    dataset_id: Mapped[int | None] = mapped_column(ForeignKey("datasets.id", ondelete="RESTRICT"))
+    certificate_snapshot: Mapped[dict | None] = mapped_column(JSON)
+    certificate_file_data: Mapped[bytes | None] = mapped_column(LargeBinary, deferred=True)
     sender_name: Mapped[str] = mapped_column(String(160), nullable=False)
     reply_to: Mapped[str | None] = mapped_column(String(320))
     subject: Mapped[str] = mapped_column(String(300), nullable=False)
@@ -55,6 +58,7 @@ class EmailDelivery(Base):
     participant_key: Mapped[str] = mapped_column(String(320), nullable=False)
     participant_name: Mapped[str] = mapped_column(String(160), nullable=False)
     college: Mapped[str | None] = mapped_column(String(160))
+    team_name: Mapped[str | None] = mapped_column(String(160))
     email: Mapped[str] = mapped_column(String(320), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="PENDING")
     provider_message_id: Mapped[str | None] = mapped_column(String(255))

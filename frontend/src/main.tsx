@@ -10,8 +10,8 @@ import { EmailCampaignsPage } from './pages/EmailCampaignsPage'
 import { AdminLoginPage } from './pages/AdminLoginPage'
 import { AdminUsersPage } from './pages/AdminUsersPage'
 import { AdminCertificatesPage } from './pages/AdminCertificatesPage'
-import { AdminCertificateTemplatesPage } from './pages/AdminCertificateTemplatesPage'
-import { EmailTemplatesPage } from './pages/EmailTemplatesPage'
+import { TemplatesPage } from './pages/TemplatesPage'
+import { CsvManagementPage } from './pages/CsvManagementPage'
 import { EmailComposePage } from './pages/EmailComposePage'
 import { HomePage } from './pages/HomePage'
 import './styles.css'
@@ -25,8 +25,10 @@ ReactDOM.createRoot(document.getElementById('root')!).render(<React.StrictMode><
     <Route path="/admin/participants" element={<AdminParticipantsPage />} />
     <Route element={<ProtectedRoute certificateAdminOnly />}>
       <Route path="/admin/certificates" element={<AdminCertificatesPage />} />
-      <Route path="/admin/certificates/templates" element={<AdminCertificateTemplatesPage />} />
-      <Route path="/admin/email/templates" element={<EmailTemplatesPage />} />
+      <Route path="/admin/csv" element={<CsvManagementPage />} />
+      <Route path="/admin/templates" element={<TemplatesPage />} />
+      <Route path="/admin/certificates/templates" element={<Navigate to="/admin/templates?tab=certificates" replace />} />
+      <Route path="/admin/email/templates" element={<Navigate to="/admin/templates?tab=email" replace />} />
       <Route path="/admin/email/compose" element={<EmailComposePage />} />
       <Route path="/admin/email/campaigns" element={<EmailCampaignsPage />} />
     </Route>

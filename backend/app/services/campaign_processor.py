@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.models.certificate import CertificateTemplate
 from app.models.email import EmailCampaign, EmailDelivery
 from app.models.participant import Participant
-from app.services.certificates import placeholder_values, render_pdf
+from app.services.certificates import campaign_template, placeholder_values, render_pdf
 from app.services.email_campaigns import AMBIGUOUS_HISTORY, ALREADY_SENT, refresh_status, send_history, sent_keys, utcnow
 from app.services.email_delivery import filename, provider, render
 
@@ -57,14 +57,17 @@ def process_campaign(db: Session, campaign_id: int, limit: int) -> int:
                     processed += 1
                     continue
             delivery.attempt_count += 1
-            team = person.team_name if person is not None else None
+            team = person.team_name if person is not None else delivery.team_name
+            # Preserve the existing ability to correct pending recipients. Resolve every value from
+            # the same participant ID, never by email (which may be shared by several people).
             if person is not None:
                 delivery.participant_name = person.name
                 delivery.college = person.college
+                delivery.team_name = person.team_name
                 delivery.email = person.email
             pdf = template = None
             if campaign.attach_certificate:
-                template = db.get(CertificateTemplate, campaign.certificate_template_id)
+                template = campaign_template(db, campaign)
                 if not template:
                     raise FileNotFoundError("Certificate template is missing")
                 pdf = render_pdf(template, delivery.participant_name, delivery.college, team,

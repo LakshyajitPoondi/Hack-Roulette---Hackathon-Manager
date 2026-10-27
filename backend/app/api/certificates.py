@@ -15,6 +15,8 @@ from app.services import certificate_fonts as fonts
 from app.services import certificates as service
 from app.services.db_participants import get_person
 from app.models.participant import Participant
+from app.models.email import EmailCampaign
+from app.services.template_names import validate_name
 
 router = APIRouter(prefix="/api/certificates", tags=["certificates"])
 Admin = Annotated[User, Depends(require_role(Role.SUPER_ADMIN, Role.ADMIN))]
@@ -42,8 +44,7 @@ def templates(db: Database, _: Admin):
 
 @router.post("/templates", response_model=TemplateRead, status_code=201)
 async def upload_template(db: Database, actor: Admin, file: UploadFile = File(...), name: str = Form(...)):
-    if not name.strip() or len(name.strip()) > 160:
-        raise HTTPException(422, "Template name must contain 1–160 characters")
+    name = validate_name(db, CertificateTemplate, name)
     data = await file.read(service.MAX_TEMPLATE_BYTES + 1)
     extension = service.validate_template(data)
     template = CertificateTemplate(name=name.strip(), file_data=data, file_type=extension, created_by=actor.id)
@@ -54,6 +55,8 @@ async def upload_template(db: Database, actor: Admin, file: UploadFile = File(..
 @router.patch("/templates/{template_id}", response_model=TemplateRead)
 def update_template(template_id: int, payload: TemplateUpdate, db: Database, _: Admin):
     template = service.get_template(db, template_id)
+    if payload.name is not None and payload.name != template.name:
+        validate_name(db, CertificateTemplate, payload.name, template_id)
     for key, value in payload.model_dump(exclude_unset=True).items():
         if value is None:
             raise HTTPException(422, "Template settings cannot be empty")
@@ -71,6 +74,9 @@ def update_template(template_id: int, payload: TemplateUpdate, db: Database, _: 
 
 @router.post("/templates/{template_id}/activate", response_model=TemplateRead)
 def activate_template(template_id: int, db: Database, _: Admin):
+    if db.bind.dialect.name == "postgresql":
+        from sqlalchemy import text
+        db.execute(text("SELECT pg_advisory_xact_lock(hashtextextended('active-certificate', 0))"))
     template = service.get_template(db, template_id)
     if not template.is_active:
         db.execute(update(CertificateTemplate).where(CertificateTemplate.is_active.is_(True)).values(is_active=False))
@@ -94,6 +100,8 @@ def delete_template(template_id: int, db: Database, _: Admin):
     template = service.get_template(db, template_id)
     if template.is_active:
         raise HTTPException(409, "Activate another template before deleting this one")
+    if db.scalar(select(EmailCampaign.id).where(EmailCampaign.certificate_template_id == template_id).limit(1)) is not None:
+        raise HTTPException(409, "This certificate is referenced by campaign history and must be preserved")
     db.delete(template); db.commit()
 
 

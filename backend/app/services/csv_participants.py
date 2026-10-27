@@ -111,7 +111,7 @@ def preview(db: Session, data: bytes) -> dict:
             "invalid": sum(row["status"] == "INVALID" for row in rows)}
 
 
-def import_rows(db: Session, data: bytes, expected_digest: str, approved_lines: set[int] = frozenset()) -> dict:
+def import_rows(db: Session, data: bytes, expected_digest: str, approved_lines: set[int] = frozenset(), *, commit=True) -> dict:
     """Import new rows, plus REVIEW rows whose line the admin approved. Exact duplicates are never imported."""
     if hashlib.sha256(data).hexdigest() != expected_digest:
         raise HTTPException(409, "CSV changed after preview. Preview it again.")
@@ -129,7 +129,8 @@ def import_rows(db: Session, data: bytes, expected_digest: str, approved_lines: 
         # The name+email unique index skips any exact duplicate created concurrently.
         statement = insert(Participant).values(values).on_conflict_do_nothing().returning(Participant.email, Participant.name)
         inserted = {(identity_part(email), identity_part(name)) for email, name in db.execute(statement).all()}
-        db.commit()
+        if commit:
+            db.commit()
     was_inserted = lambda row: (identity_part(row["email"]), identity_part(row["name"])) in inserted
     imported_new = sum(map(was_inserted, new))
     imported_reviewed = sum(map(was_inserted, reviewed))

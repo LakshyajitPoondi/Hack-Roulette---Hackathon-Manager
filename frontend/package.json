@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "test:csv": "tsc src/services/csvEditor.ts --module commonjs --target ES2022 --outDir ../output/csv-editor-tests --skipLibCheck --strict && node --test tests/csvEditor.test.cjs",
     "preview": "vite preview"
   },
   "dependencies": {

@@ -12,7 +12,9 @@ from app.db.session import get_db
 from app.models.email import EmailCampaign, EmailDelivery, EmailTemplate
 from app.models.user import Role, User
 from app.services.campaign_processor import MAX_ATTEMPTS, SEND_BATCH_SIZE, process_campaign
-from app.services.certificates import active_template, placeholder_values, render_pdf
+from app.services.certificates import active_template, selected_template, snapshot_template, placeholder_values, render_pdf
+from app.services.template_names import validate_name
+from app.models.dataset import Dataset
 from app.services.db_participants import get_person
 from app.services.email_campaigns import campaign_data, classify, recipients, utcnow
 from app.services.email_delivery import render, provider
@@ -31,6 +33,7 @@ class TemplateInput(BaseModel):
 class PreviewInput(TemplateInput):
     participant_id: int | None = None
     attach_certificate: bool = False
+    certificate_template_id: int | None = None
 
 
 class Selection(BaseModel):
@@ -42,11 +45,13 @@ class Selection(BaseModel):
     send_to: Literal["all", "unsent"] = "unsent"
     name: str = "Tech Roulette certificates"
     attach_certificate: bool = True
+    dataset_id: int | None = None
 
 
 class CampaignInput(Selection):
     name: str = Field(min_length=1, max_length=160)
     email_template_id: int | None = None
+    certificate_template_id: int | None = None
     sender_name: str = Field(min_length=1, max_length=160)
     reply_to: str | None = None
     subject: str = Field(min_length=1, max_length=300)
@@ -64,6 +69,13 @@ class TestInput(BaseModel):
     body: str
     participant_id: int | None = None
     attach_certificate: bool = True
+    certificate_template_id: int | None = None
+
+
+class TemplatePatch(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=160)
+    subject: str | None = Field(default=None, min_length=1, max_length=300)
+    body: str | None = Field(default=None, min_length=1)
 
 
 class ManualEmail(BaseModel):
@@ -151,18 +163,25 @@ def templates(db: Database, _: Admin):
 @router.post("/templates", status_code=201)
 def create_template(payload: TemplateInput, db: Database, actor: Admin):
     preview(payload.subject, payload.body)
-    item = EmailTemplate(**payload.model_dump(), created_by=actor.id)
+    values = payload.model_dump()
+    values["name"] = validate_name(db, EmailTemplate, payload.name)
+    item = EmailTemplate(**values, created_by=actor.id)
     db.add(item); db.commit(); db.refresh(item)
     return item
 
 
 @router.patch("/templates/{template_id}")
-def update_template(template_id: int, payload: TemplateInput, db: Database, _: Admin):
+def update_template(template_id: int, payload: TemplatePatch, db: Database, _: Admin):
     item = db.get(EmailTemplate, template_id)
     if not item:
         raise HTTPException(404, "Template not found")
-    preview(payload.subject, payload.body)
-    for key, value in payload.model_dump().items():
+    values = payload.model_dump(exclude_unset=True)
+    if not values or any(value is None for value in values.values()):
+        raise HTTPException(422, "Provide nonempty template changes")
+    if "name" in values and values["name"] != item.name:
+        values["name"] = validate_name(db, EmailTemplate, payload.name, template_id)
+    preview(values.get("subject", item.subject), values.get("body", item.body))
+    for key, value in values.items():
         setattr(item, key, value)
     db.commit(); db.refresh(item)
     return item
@@ -183,8 +202,10 @@ def preview_email(payload: PreviewInput, db: Database, _: Admin):
         template = None
         if payload.attach_certificate:
             try:
-                template = active_template(db)
+                template = selected_template(db, payload.certificate_template_id)
             except HTTPException:
+                if payload.certificate_template_id is not None:
+                    raise
                 template = None  # No active template yet: preview the values unchanged.
         values = placeholder_values(template, person.name, person.college)
         try:
@@ -203,7 +224,7 @@ def test_email(payload: TestInput, db: Database, _: Admin):
     if payload.participant_id:
         from app.services.email_delivery import filename
         person = get_person(db, payload.participant_id)
-        template = active_template(db) if payload.attach_certificate else None
+        template = selected_template(db, payload.certificate_template_id) if payload.attach_certificate else None
         if template is not None:
             attachment = render_pdf(template, person.name, person.college, person.team_name)
             attachment_name = filename(person.name)
@@ -262,14 +283,21 @@ def create_campaign(payload: CampaignInput, db: Database, actor: Admin):
     reply = valid_email(payload.reply_to)
     if payload.email_template_id and not db.get(EmailTemplate, payload.email_template_id):
         raise HTTPException(404, "Email template not found")
-    people, _ambiguous = recipients(db, **payload.model_dump(include={"selection", "participant_ids", "college", "attendance", "resend", "send_to", "name", "attach_certificate"}))
+    if payload.dataset_id is not None:
+        dataset = db.get(Dataset, payload.dataset_id)
+        if dataset is None or dataset.archived:
+            raise HTTPException(409, "Select an available dataset")
+    people, _ambiguous = recipients(db, **payload.model_dump(include={"selection", "participant_ids", "college", "attendance", "resend", "send_to", "name", "attach_certificate", "dataset_id"}))
     result = classify(db, people)
     if not result["ready"]:
         raise HTTPException(422, "No eligible recipients have a valid email address")
     if payload.expected_recipients is not None and len(result["ready"]) != payload.expected_recipients:
         raise HTTPException(409, "Recipient count changed since review. Review the send again.")
-    template = active_template(db) if payload.attach_certificate else None
+    template = selected_template(db, payload.certificate_template_id) if payload.attach_certificate else None
     item = EmailCampaign(name=payload.name.strip(), email_template_id=payload.email_template_id,
+                         dataset_id=payload.dataset_id,
+                         certificate_snapshot=snapshot_template(template) if template else None,
+                         certificate_file_data=bytes(template.file_data) if template and template.file_data is not None else None,
                          certificate_template_id=template.id if template else None,
                          certificate_include_college=template.include_college if template else True,
                          certificate_include_team=template.include_team if template else False,
@@ -280,7 +308,7 @@ def create_campaign(payload: CampaignInput, db: Database, actor: Admin):
     db.add(item); db.flush()
     for person in result["ready"]:
         db.add(EmailDelivery(campaign_id=item.id, participant_id=person.id, participant_key=person.participant_key,
-                             participant_name=person.name, college=person.college, email=person.email, status="PENDING"))
+                             participant_name=person.name, college=person.college, team_name=person.team_name, email=person.email, status="PENDING"))
     db.commit(); db.refresh(item)
     process_campaign(db, item.id, SEND_BATCH_SIZE)
     db.refresh(item)

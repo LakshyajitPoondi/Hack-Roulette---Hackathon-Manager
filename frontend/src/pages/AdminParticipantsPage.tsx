@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { api, ApiError } from '../services/api'
 import { useAuth } from '../hooks/useAuth'
 import type { CsvParticipant, CsvParticipantPage, CsvPreview, CsvPreviewRow } from '../types/participant'
+import type { DatasetSummary } from '../types/dataset'
 
 type ParticipantField = 'name' | 'email' | 'team_name' | 'college'
 // A draft without an id is a new participant; with an id it edits an existing one.
@@ -15,6 +16,8 @@ export function AdminParticipantsPage() {
   const { user } = useAuth()
   const canManage = user?.role !== 'STAFF'
   const [page, setPage] = useState(1)
+  const [datasets, setDatasets] = useState<DatasetSummary[]>([])
+  const [datasetId, setDatasetId] = useState<number | undefined>()
   // searchInput updates on every keystroke; search follows after a pause and drives the request.
   const [searchInput, setSearchInput] = useState('')
   const [search, setSearch] = useState('')
@@ -35,6 +38,7 @@ export function AdminParticipantsPage() {
   const [saving, setSaving] = useState(false)
   const [reviewing, setReviewing] = useState(false)
   const [sharedWarning, setSharedWarning] = useState('')
+  useEffect(() => { if (canManage) api.datasets().then(setDatasets).catch(err => setError(err.message)) }, [canManage, reload])
 
   useEffect(() => {
     if (searchInput === search) return
@@ -46,7 +50,7 @@ export function AdminParticipantsPage() {
     let active = true
     const [sortBy, sortDir] = sort.split(':')
     setLoading(true); setListError('')
-    api.csvParticipants(search, sortBy, sortDir, page).then(result => {
+    api.csvParticipants(search, sortBy, sortDir, page, datasetId).then(result => {
       if (!active) return
       if (result.source !== 'csv') throw new Error('This server is still using Google Sheets. Deploy the updated CSV backend; a Sheets connection is not required.')
       setData(result)
@@ -58,7 +62,7 @@ export function AdminParticipantsPage() {
         : err instanceof Error ? err.message : 'Could not load participants.')
     }).finally(() => { if (active) setLoading(false) })
     return () => { active = false }
-  }, [search, sort, page, reload])
+  }, [search, sort, page, reload, datasetId])
 
   async function upload() {
     if (!file) return
@@ -80,7 +84,7 @@ export function AdminParticipantsPage() {
     finally { setBusy(false) }
   }
   async function remove(id: number, name: string) {
-    if (!window.confirm(`Delete ${name} from participants?`)) return
+    if (!window.confirm(`Delete ${name} globally, including membership in every saved dataset? Participants referenced by send history are protected.`)) return
     try { await api.deleteCsvParticipant(id); setSelected(previous => { const next = new Set(previous); next.delete(id); return next }); setReload(value => value + 1) }
     catch (err) { setError(err instanceof Error ? err.message : 'Delete failed') }
   }
@@ -116,7 +120,7 @@ export function AdminParticipantsPage() {
     finally { setSaving(false) }
   }
   async function clear() {
-    if (!window.confirm('Clear ALL imported participants? Send history will remain.')) return
+    if (!window.confirm('Clear ALL participants from ALL saved datasets? Use CSV Management to switch datasets without deleting anyone. This action is blocked if send history exists.')) return
     try { await api.clearCsvParticipants(); setSelected(new Set()); setMessage('Participants cleared.'); setReload(value => value + 1) }
     catch (err) { setError(err instanceof Error ? err.message : 'Clear failed') }
   }
@@ -128,7 +132,8 @@ export function AdminParticipantsPage() {
   const pageIds = data?.items.map(person => person.id) ?? []
   const legacyServer = listError.includes('still using Google Sheets')
   return <>
-    <div className="admin-page-heading"><div><span className="eyebrow">/ STEP 1</span><h1>PARTICIPANTS<span>.</span></h1><p>Upload a CSV, check every row, then import the valid participants.</p></div></div>
+    <div className="admin-page-heading"><div><span className="eyebrow">/ STEP 1</span><h1>PARTICIPANTS<span>.</span></h1><p>View and manage participants across saved datasets.</p></div>{canManage && <Link className="button button-outline" to="/admin/csv">CSV MANAGEMENT →</Link>}</div>
+    {canManage && <div className="csv-toolbar"><label>Dataset<select value={datasetId ?? ''} onChange={e => { setDatasetId(e.target.value ? Number(e.target.value) : undefined); setPage(1); setSelected(new Set()) }}><option value="">All participants</option>{datasets.map(d => <option key={d.id} value={d.id}>{d.name} · {d.participant_count} participants{d.archived ? ' (archived)' : ''}</option>)}</select></label></div>}
     {error && <div className="form-error" role="alert">{error}</div>}{message && <div className="form-success" role="status">{message}</div>}
     {canManage && <section className="admin-info-card csv-upload"><h2>UPLOAD PARTICIPANTS CSV</h2><p>Required columns: <code>name,email</code>. Optional columns: <code>team_name,college</code> (blank cells are allowed). Common header variations are accepted.</p><div className="csv-file-row"><label className="button button-outline" htmlFor="participants-csv">CHOOSE FILE<input id="participants-csv" className="visually-hidden" type="file" accept=".csv,text/csv" onChange={event => { setFile(event.target.files?.[0] || null); setPreview(null) }} /></label><span>{file?.name || 'No file chosen'}</span><button className="button button-dark" type="button" disabled={!file || busy || legacyServer} onClick={() => void upload()}>{busy ? 'CHECKING…' : 'PREVIEW CSV'}</button></div><button className="text-action" type="button" onClick={sample}>DOWNLOAD SAMPLE CSV ↓</button></section>}
     {preview && <section className="admin-info-card"><h2>IMPORT PREVIEW</h2><div className="csv-counts"><strong>{preview.valid} new</strong><strong>{preview.review} need review</strong><strong>{preview.duplicates} exact duplicates</strong><strong>{preview.invalid} invalid</strong></div><div className="participant-table-wrap"><table className="participants-table csv-table"><thead><tr><th>LINE</th><th>NAME</th><th>EMAIL</th><th>TEAM</th><th>COLLEGE</th><th>STATUS / REASON</th></tr></thead><tbody>{preview.rows.map(row => <tr key={row.line}><td>{row.line}</td><td>{row.name || '—'}</td><td>{row.email || '—'}</td><td>{row.team_name || '—'}</td><td>{row.college || '—'}</td><td><strong>{STATUS_LABELS[row.status]}</strong>{row.reason && <small>{row.reason}</small>}</td></tr>)}</tbody></table></div><div className="certificate-actions"><button type="button" disabled={busy} onClick={() => setPreview(null)}>CANCEL</button><button type="button" disabled={busy || !(preview.review + preview.duplicates)} onClick={() => setReviewing(true)}>REVIEW DUPLICATES</button><button type="button" disabled={busy || !preview.valid} onClick={() => void importCsv()}>{busy ? 'IMPORTING…' : `IMPORT ${preview.valid} NEW PARTICIPANTS`}</button></div>{preview.review > 0 && <p>Rows that share an email with someone else are not imported unless you approve them in REVIEW DUPLICATES.</p>}</section>}
@@ -148,7 +153,7 @@ export function AdminParticipantsPage() {
     </section>
     {(data?.total_pages ?? 0) > 1 && <div className="participant-pagination"><span>PAGE {page} OF {data?.total_pages}</span><div><button disabled={page === 1} onClick={() => setPage(value => value - 1)}>PREVIOUS</button><button disabled={page === data?.total_pages} onClick={() => setPage(value => value + 1)}>NEXT</button></div></div>}
     {canManage && selected.size > 0 && <button type="button" className="button button-dark" onClick={() => navigate('/admin/email/compose', { state: { participantIds: [...selected] } })}>COMPOSE FOR {selected.size} SELECTED →</button>}
-    {canManage && !!data?.total && <button type="button" className="text-action csv-clear" onClick={() => void clear()}>CLEAR PARTICIPANTS</button>}
+    {canManage && !!data?.total && <button type="button" className="text-action csv-clear" onClick={() => void clear()}>CLEAR ALL PARTICIPANTS (ALL DATASETS)</button>}
     {editing && <div className="edit-backdrop" onMouseDown={event => { if (event.target === event.currentTarget && !saving) setEditing(null) }}><form className="admin-info-card edit-participant" aria-label={editing.id === undefined ? 'Add participant' : 'Edit participant'} noValidate onSubmit={event => void saveEdit(event)}><h2>{editing.id === undefined ? 'ADD PARTICIPANT' : 'EDIT PARTICIPANT'}</h2>{editError && <div className="form-error" role="alert">{editError}</div>}{([['name', 'Name', true], ['email', 'Email', true], ['team_name', 'Team Name', false], ['college', 'College Name', false]] as const).map(([field, label, required]) => <label key={field}>{label}{required ? ' *' : ' (optional)'}<input required={required} maxLength={field === 'email' ? 320 : 160} type={field === 'email' ? 'email' : 'text'} value={editing[field] ?? ''} aria-invalid={!!fieldErrors[field]} aria-describedby={fieldErrors[field] ? `${field}-error` : undefined} onChange={event => { const value = event.target.value; setEditing(previous => previous ? { ...previous, [field]: value } : previous); setFieldErrors(previous => ({ ...previous, [field]: undefined })); setSharedWarning('') }} />{fieldErrors[field] && <small id={`${field}-error`} className="field-error" role="alert">{fieldErrors[field]}</small>}</label>)}{sharedWarning && <div className="form-error" role="alert">{sharedWarning}<div className="certificate-actions"><button type="button" disabled={saving} onClick={() => void saveEdit(undefined, true)}>{editing.id === undefined ? 'ADD ANYWAY' : 'SAVE ANYWAY'}</button></div></div>}<div className="certificate-actions"><button type="button" disabled={saving} onClick={() => setEditing(null)}>CANCEL</button><button type="submit" disabled={saving}>{saving ? 'SAVING…' : editing.id === undefined ? 'ADD PARTICIPANT' : 'SAVE'}</button></div></form></div>}
   </>
 }

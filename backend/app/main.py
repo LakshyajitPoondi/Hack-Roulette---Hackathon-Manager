@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from urllib.parse import urlsplit
 
-from app.api import admin, auth, certificates, emails, participants
+from app.api import admin, auth, certificates, datasets, emails, participants
 from app.core.config import get_settings
 
 settings = get_settings()
@@ -27,6 +27,7 @@ async def check_origin(request: Request, call_next):
 app.include_router(auth.router)
 app.include_router(admin.router)
 app.include_router(participants.router)
+app.include_router(datasets.router)
 app.include_router(certificates.router)
 app.include_router(emails.router)
 

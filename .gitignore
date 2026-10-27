@@ -19,3 +19,5 @@ backend/storage/
 frontend/.chrome-qa*/
 frontend/qa-*.png
 *.tsbuildinfo
+
+output/csv-editor-tests/

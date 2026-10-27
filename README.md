@@ -4,20 +4,20 @@ Temporary hackathon website and certificate mailer built for Vercel: React/Vite 
 
 ## Architecture
 
-- The admin previews and imports a UTF-8 CSV with `name,email,team_name,college` columns. PostgreSQL stores those participants alongside admin users, templates, and send history.
+- CSV Management saves named UTF-8 datasets, provides editing/validation/deduplication previews and imports eligible participants. `name,email` are required; `team_name,college` are optional. Extra columns remain in the saved dataset.
 - Google Sheets integration remains in the repository but is currently disabled in the admin workflow.
-- A certificate is rendered in memory from the active template using only `participant_name` and `college_name`, attached to the Brevo request, then discarded.
+- Compose Email defaults to the active certificate and allows another selection or no attachment. Each campaign snapshots that configuration/artwork; personalized PDFs render in memory using participant name, optional college and team.
 - Admins select imported recipients and confirm SEND. Certificates are generated during small, consecutive requests started by that click; delivery status is recorded for each recipient. An interrupted send can be resumed from Send History.
 - There is no Celery, Redis, worker, or always-running backend process.
 
-The PostgreSQL schema is maintained in [supabase_schema.sql](supabase_schema.sql). CSV imports skip existing normalized email addresses.
+The PostgreSQL schema is maintained in [supabase_schema.sql](supabase_schema.sql). Participants are identified by normalized name and email, so several people can share an address. Datasets reuse existing participant IDs without clearing earlier collections or send history. See [dataset/template implementation and migration notes](docs/admin-data-management.md).
 
 ## Local setup
 
 Requirements: Node 20.19+ or 22+, Python 3.11+, and a Supabase Postgres project. Docker is not required.
 
 1. Create or open the Supabase project.
-2. Open its SQL Editor and run [supabase_schema.sql](supabase_schema.sql). For an existing database, this adds the CSV participant table and `allow_resend` column while preserving campaign rows. Review any older schema differences before running the app; `CREATE TABLE IF NOT EXISTS` does not change other existing columns.
+2. Open its SQL Editor and run [supabase_schema.sql](supabase_schema.sql) for a fresh database. For an existing current-schema database, apply [the dataset/certificate snapshot migration](backend/migrations/20261026_datasets_and_certificate_snapshots.sql) before starting this version. Existing participant IDs and delivery records are preserved; pre-upgrade participants receive a default dataset. Review older schema differences before upgrading.
 3. Set `DATABASE_URL` to the Supabase Postgres connection string in `backend/.env` for local use or in Vercel's backend environment settings for deployment.
 4. Seed the initial admin from a trusted shell, then start or deploy the application.
 

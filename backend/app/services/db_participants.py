@@ -5,10 +5,13 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.participant import Participant
+from app.models.dataset import DatasetParticipant
 
 
-def list_people(db: Session, search: str = "", sort_by: str = "name", sort_dir: str = "asc", page: int = 1, page_size: int = 50):
+def list_people(db: Session, search: str = "", sort_by: str = "name", sort_dir: str = "asc", page: int = 1, page_size: int = 50, dataset_id: int | None = None):
     statement = select(Participant)
+    if dataset_id is not None:
+        statement = statement.join(DatasetParticipant).where(DatasetParticipant.dataset_id == dataset_id)
     if search.strip():
         pattern = f"%{search.strip()}%"
         statement = statement.where(or_(Participant.name.ilike(pattern), Participant.email.ilike(pattern),
